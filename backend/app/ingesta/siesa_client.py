@@ -182,10 +182,49 @@ class SiesaClient:
             crudo=r,
         )
 
+    # ── modales ──────────────────────────────────────────────────────────────
+    def _cerrar_modales(self):
+        """Cierra cualquier modal abierto y elimina backdrops residuales.
+
+        El portal muestra modales (validación de documento, visor de PDF) que,
+        si un PDF tarda más de la cuenta y queda uno abierto, tapan el botón
+        'Buscar' del siguiente documento y hacen fallar toda la corrida en
+        cascada. Se cierra defensivamente antes de cada descarga.
+        """
+        p = self.page
+        sel = ".modal.in, .modal.show, [uib-modal-window]"
+        # 1) intento amable: botón de cierre / Escape (deja limpio el stack de Angular)
+        for _ in range(3):
+            if p.locator(sel).count() == 0:
+                break
+            try:
+                p.locator(f"{sel} button.close, {sel} button[data-dismiss='modal']").first.click(timeout=1500)
+            except Exception:
+                try:
+                    p.keyboard.press("Escape")
+                except Exception:
+                    pass
+            p.wait_for_timeout(400)
+        # 2) red de seguridad: ocultar cualquier modal/backdrop residual que siga
+        #    interceptando clics (un modal atascado tapa el botón 'Buscar' del
+        #    siguiente documento y tumba la corrida en cascada)
+        p.evaluate(
+            """() => {
+                document.querySelectorAll('.modal-backdrop').forEach(b => b.remove());
+                document.querySelectorAll('[uib-modal-window], .modal.in, .modal.show').forEach(m => {
+                    m.style.display = 'none';
+                    m.classList.remove('in', 'show');
+                });
+                document.body.classList.remove('modal-open');
+                document.body.style.removeProperty('padding-right');
+            }"""
+        )
+
     # ── descarga de PDF ────────────────────────────────────────────────────────
     def descargar_pdf(self, cufe: str) -> bytes:
         """Filtra por CUFE, abre 'Ver PDF' y devuelve los bytes del PDF."""
         p = self.page
+        self._cerrar_modales()  # limpiar cualquier modal dejado por el doc anterior
         caja_cufe = p.locator("input[placeholder*='CUFE' i]").first
         caja_cufe.fill("")
         caja_cufe.fill(cufe)
