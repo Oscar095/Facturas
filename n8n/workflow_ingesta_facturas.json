@@ -1,0 +1,105 @@
+{
+  "name": "Ingesta diaria de facturas Siesa",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "cronExpression", "expression": "0 30 6 * * *" }
+          ]
+        }
+      },
+      "id": "cron",
+      "name": "Todos los días 6:30 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.FACTURAS_API_URL }}/api/jobs/sync",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "dias", "value": "3" },
+            { "name": "esperar", "value": "true" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "={{ $env.FACTURAS_JOBS_API_KEY }}" }
+          ]
+        },
+        "options": { "timeout": 1800000 }
+      },
+      "id": "sync",
+      "name": "Ejecutar sincronización",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true },
+          "combinator": "or",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.facturas_nuevas }}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "gt" }
+            },
+            {
+              "leftValue": "={{ $json.errores }}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "gt" }
+            }
+          ]
+        }
+      },
+      "id": "hayNovedades",
+      "name": "¿Hay novedades o errores?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "subject": "=Facturas Siesa {{ $now.format('yyyy-MM-dd') }} — {{ $json.facturas_nuevas }} nuevas, {{ $json.errores }} errores",
+        "bodyContent": "=Resumen de la ingesta diaria de facturas:\n\n• Ejecución: {{ $json.ejecucion_id }}\n• Estado: {{ $json.estado }}\n• Facturas nuevas: {{ $json.facturas_nuevas }}\n• Errores: {{ $json.errores }}\n• Facturas sin área asignada (revisar en el portal): {{ $json.sin_area_asignada.join(', ') || 'ninguna' }}\n\nEntra al portal para revisar y cargar documentos pendientes.",
+        "toRecipients": "={{ $env.FACTURAS_NOTIFICA_EMAIL }}",
+        "additionalFields": {}
+      },
+      "id": "correo",
+      "name": "Enviar correo (Office 365)",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [980, 220],
+      "credentials": {
+        "microsoftOutlookOAuth2Api": { "id": "REEMPLAZAR", "name": "Outlook KOS" }
+      }
+    }
+  ],
+  "connections": {
+    "Todos los días 6:30 AM": {
+      "main": [[{ "node": "Ejecutar sincronización", "type": "main", "index": 0 }]]
+    },
+    "Ejecutar sincronización": {
+      "main": [[{ "node": "¿Hay novedades o errores?", "type": "main", "index": 0 }]]
+    },
+    "¿Hay novedades o errores?": {
+      "main": [
+        [{ "node": "Enviar correo (Office 365)", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": {
+    "descripcion": "Programa a las 6:30 AM la ingesta de facturas. Llama al backend (POST /api/jobs/sync con esperar=true, timeout 30 min), y si hubo facturas nuevas o errores envía un correo resumen por Outlook/Office 365. Configurar variables de entorno en n8n: FACTURAS_API_URL, FACTURAS_JOBS_API_KEY, FACTURAS_NOTIFICA_EMAIL."
+  }
+}

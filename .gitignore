@@ -1,0 +1,34 @@
+# Secretos — nunca commitear
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Node / React
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Datos locales de prueba
+descargas/
+*.pdf
+*.xml
+!n8n/*.json
+*.xlsx
+*.xls
+
+# IDE / SO
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+
+# Claude Code (local, no compartir)
+.claude/settings.local.json
