@@ -61,7 +61,7 @@ def _crear_factura(db: Session, doc: DocumentoPortal, siesa: SiesaClient, almace
     prov = _upsert_proveedor(db, doc.nit_emisor, doc.emisor)
 
     # Descargar y subir el PDF (documento FV)
-    pdf = siesa.descargar_pdf(doc.cufe)
+    pdf = siesa.descargar_pdf(doc.cufe, doc.fecha)
     ruta = _ruta_blob(doc.nit_emisor, doc.folio, doc.fecha)
     almacen.subir(ruta, pdf, content_type="application/pdf")
 

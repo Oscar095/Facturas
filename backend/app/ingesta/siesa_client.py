@@ -220,11 +220,51 @@ class SiesaClient:
             }"""
         )
 
+    # ── filtro de fecha ────────────────────────────────────────────────────────
+    def _fijar_rango_fecha(self, desde: datetime, hasta: datetime):
+        """Fija los campos Desde/Hasta de la grilla al rango dado.
+
+        El datepicker de Angular ignora un fill() simple y reinicia el campo a
+        'hoy'; por eso la grilla solo mostraba documentos del día actual y la
+        búsqueda por CUFE de un documento de otro día devolvía 0 filas. Se
+        escribe con eventos input/change para que Angular tome el valor.
+        """
+        p = self.page
+        for sel, valor in (("input[placeholder*='Desde' i]", desde),
+                           ("input[placeholder*='Hasta' i]", hasta)):
+            loc = p.locator(sel).first
+            loc.click()
+            loc.fill("")
+            loc.type(valor.strftime("%Y/%m/%d"), delay=20)
+            loc.evaluate(
+                "el => { el.dispatchEvent(new Event('input',{bubbles:true}));"
+                " el.dispatchEvent(new Event('change',{bubbles:true})); }"
+            )
+            loc.press("Escape")  # cerrar el calendario si se abrió
+
     # ── descarga de PDF ────────────────────────────────────────────────────────
-    def descargar_pdf(self, cufe: str) -> bytes:
-        """Filtra por CUFE, abre 'Ver PDF' y devuelve los bytes del PDF."""
+    def descargar_pdf(self, cufe: str, fecha: datetime | None = None) -> bytes:
+        """Filtra por CUFE, abre 'Ver PDF' y devuelve los bytes del PDF.
+
+        `fecha` es la fecha del documento: se usa para acotar la grilla a ese
+        día antes de buscar por CUFE (si no, la grilla queda en 'hoy' y no
+        encuentra documentos de días anteriores).
+        """
+        ultimo_error: Exception | None = None
+        for intento in range(3):
+            try:
+                return self._descargar_pdf_una_vez(cufe, fecha)
+            except Exception as e:  # noqa: BLE001 — reintentar ante lentitud/modales del portal
+                ultimo_error = e
+                self._cerrar_modales()
+                time.sleep(2)
+        raise ultimo_error  # type: ignore[misc]
+
+    def _descargar_pdf_una_vez(self, cufe: str, fecha: datetime | None) -> bytes:
         p = self.page
         self._cerrar_modales()  # limpiar cualquier modal dejado por el doc anterior
+        if fecha is not None:
+            self._fijar_rango_fecha(fecha, fecha)
         caja_cufe = p.locator("input[placeholder*='CUFE' i]").first
         caja_cufe.fill("")
         caja_cufe.fill(cufe)
