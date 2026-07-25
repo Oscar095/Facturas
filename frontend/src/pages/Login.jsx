@@ -28,7 +28,12 @@ export default function Login() {
   return (
     <div className="login-pagina">
       <aside className="login-panel">
-        <div className="login-marca">Portal de Facturas</div>
+        <div className="login-marca">
+          <span className="marca-insignia">
+            <img src="/logo-kos.png" alt="KOS" />
+          </span>
+          <span>Portal de Facturas</span>
+        </div>
         <motion.p
           className="login-tagline"
           initial={{ opacity: 0, y: 14 }}
@@ -42,6 +47,7 @@ export default function Login() {
       </aside>
       <div className="login-lado">
         <form className="login-caja" onSubmit={enviar}>
+          <img src="/logo-kos.png" alt="KOS" className="login-logo" />
           <h1>Bienvenido</h1>
           <p className="sub">Ingresa con tu correo y contraseña</p>
           <label>Correo</label>

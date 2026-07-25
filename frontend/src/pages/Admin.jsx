@@ -1,6 +1,47 @@
 import { useEffect, useRef, useState } from "react";
+import { motion, AnimatePresence } from "motion/react";
 import { api } from "../api";
 import { formatoFecha } from "../util";
+
+// ── helpers compartidos por el editor de usuarios ──────────────────────────────
+const AVATAR_COLORES = ["#009fe3", "#f28c30", "#2e7d55", "#7c5cbf", "#dc4c4c", "#1a365d"];
+function colorAvatar(texto = "") {
+  let h = 0;
+  for (let i = 0; i < texto.length; i++) h = (h * 31 + texto.charCodeAt(i)) | 0;
+  return AVATAR_COLORES[Math.abs(h) % AVATAR_COLORES.length];
+}
+function iniciales(nombre = "") {
+  const partes = nombre.trim().split(/\s+/);
+  return ((partes[0]?.[0] || "") + (partes[1]?.[0] || "")).toUpperCase() || "?";
+}
+function generarClave() {
+  const may = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+  const min = "abcdefghijkmnpqrstuvwxyz";
+  const num = "23456789";
+  const sim = "!@#$%*?";
+  const todos = may + min + num + sim;
+  let clave =
+    may[Math.floor(Math.random() * may.length)] +
+    num[Math.floor(Math.random() * num.length)] +
+    sim[Math.floor(Math.random() * sim.length)];
+  for (let i = 0; i < 9; i++) clave += todos[Math.floor(Math.random() * todos.length)];
+  return clave
+    .split("")
+    .sort(() => Math.random() - 0.5)
+    .join("");
+}
+function fuerzaClave(clave) {
+  let score = 0;
+  if (clave.length >= 8) score++;
+  if (clave.length >= 12) score++;
+  if (/[a-z]/.test(clave) && /[A-Z]/.test(clave)) score++;
+  if (/\d/.test(clave)) score++;
+  if (/[^A-Za-z0-9]/.test(clave)) score++;
+  return Math.min(score, 4);
+}
+const FUERZA_TEXTOS = ["Muy débil", "Débil", "Aceptable", "Fuerte", "Muy fuerte"];
+const FUERZA_COLORES = ["var(--ladrillo)", "var(--rust)", "var(--oro)", "var(--salvia)", "var(--marca)"];
+const FORM_VACIO = { email: "", nombre: "", rol: "area", area_id: "", clave: "", activo: true };
 
 export default function Admin() {
   const [tab, setTab] = useState("usuarios");
@@ -203,11 +244,25 @@ function Roles() {
   );
 }
 
+function claseRol(roles, nombreRol) {
+  const r = roles.find((x) => x.nombre === nombreRol);
+  if (!r) return "badge tipo";
+  if (r.administrar) return "badge rol-admin";
+  if (r.contabilizar) return "badge rol-conta";
+  if (r.aprobar) return "badge rol-aprueba";
+  return "badge tipo";
+}
+
 function Usuarios() {
   const [usuarios, setUsuarios] = useState([]);
   const [areas, setAreas] = useState([]);
   const [roles, setRoles] = useState([]);
-  const [nuevo, setNuevo] = useState({ email: "", nombre: "", rol: "area", area_id: "", clave: "" });
+  const [buscar, setBuscar] = useState("");
+  const [abierto, setAbierto] = useState(false);
+  const [editando, setEditando] = useState(null);
+  const [form, setForm] = useState(FORM_VACIO);
+  const [mostrarClave, setMostrarClave] = useState(false);
+  const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState("");
 
   function cargar() {
@@ -217,94 +272,288 @@ function Usuarios() {
   }
   useEffect(cargar, []);
 
-  async function crear(e) {
+  function nuevoUsuario() {
+    setEditando(null);
+    setForm({ ...FORM_VACIO, rol: roles[0]?.nombre || "area", clave: generarClave() });
+    setMostrarClave(false);
+    setError("");
+    setAbierto(true);
+  }
+
+  function editarUsuario(u) {
+    setEditando(u);
+    setForm({ email: u.email, nombre: u.nombre, rol: u.rol, area_id: u.area_id ?? "", clave: "", activo: u.activo });
+    setMostrarClave(false);
+    setError("");
+    setAbierto(true);
+  }
+
+  async function guardar(e) {
     e.preventDefault();
     setError("");
+    setGuardando(true);
     try {
-      const body = { ...nuevo, area_id: nuevo.area_id ? Number(nuevo.area_id) : null };
-      await api.post("/api/usuarios", body);
-      setNuevo({ email: "", nombre: "", rol: "area", area_id: "", clave: "" });
+      const area_id = form.area_id ? Number(form.area_id) : null;
+      if (editando) {
+        const cambios = { nombre: form.nombre, rol: form.rol, area_id, activo: form.activo };
+        if (form.clave) cambios.clave = form.clave;
+        await api.patch(`/api/usuarios/${editando.id}`, cambios);
+      } else {
+        await api.post("/api/usuarios", {
+          email: form.email,
+          nombre: form.nombre,
+          rol: form.rol,
+          area_id,
+          clave: form.clave,
+        });
+      }
+      setAbierto(false);
       cargar();
     } catch (err) {
       setError(err.message);
+    } finally {
+      setGuardando(false);
     }
   }
 
-  async function alternarActivo(u) {
-    await api.patch(`/api/usuarios/${u.id}`, { activo: !u.activo });
-    cargar();
-  }
-
-  async function cambiarRol(u, rol) {
-    setError("");
-    try {
-      await api.patch(`/api/usuarios/${u.id}`, { rol });
-      cargar();
-    } catch (err) {
-      setError(err.message);
-    }
-  }
+  const b = buscar.trim().toLowerCase();
+  const usuariosFiltrados = b
+    ? usuarios.filter((u) => `${u.nombre} ${u.email}`.toLowerCase().includes(b))
+    : usuarios;
+  const rolesDisponibles = roles.length
+    ? roles
+    : [{ nombre: "area", descripcion: "", administrar: false, contabilizar: false, aprobar: true, editar_facturas: false, ver_todas_areas: false }];
 
   return (
     <div className="panel">
-      <form className="form-linea" onSubmit={crear}>
-        <input placeholder="Correo" type="email" value={nuevo.email}
-          onChange={(e) => setNuevo({ ...nuevo, email: e.target.value })} required />
-        <input placeholder="Nombre" value={nuevo.nombre}
-          onChange={(e) => setNuevo({ ...nuevo, nombre: e.target.value })} required />
-        <select value={nuevo.rol} onChange={(e) => setNuevo({ ...nuevo, rol: e.target.value })}>
-          {roles.length === 0 ? (
-            <option value="area">area</option>
-          ) : (
-            roles.map((r) => (
-              <option key={r.id} value={r.nombre} title={r.descripcion || ""}>
-                {r.nombre}
-              </option>
-            ))
-          )}
-        </select>
-        <select value={nuevo.area_id} onChange={(e) => setNuevo({ ...nuevo, area_id: e.target.value })}>
-          <option value="">Sin área</option>
-          {areas.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}
-        </select>
-        <input placeholder="Contraseña" type="text" value={nuevo.clave}
-          onChange={(e) => setNuevo({ ...nuevo, clave: e.target.value })} required />
-        <button className="btn">Crear usuario</button>
-      </form>
-      {error && <div className="error">{error}</div>}
+      <div className="usuarios-header">
+        <input
+          className="buscador"
+          style={{ margin: 0 }}
+          placeholder="Buscar por nombre o correo…"
+          value={buscar}
+          onChange={(e) => setBuscar(e.target.value)}
+        />
+        <button className="btn" onClick={nuevoUsuario}>
+          + Nuevo usuario
+        </button>
+      </div>
 
       <table className="tabla">
         <thead>
-          <tr><th>Nombre</th><th>Correo</th><th>Rol</th><th>Área</th><th>Estado</th><th></th></tr>
+          <tr>
+            <th>Usuario</th>
+            <th>Rol</th>
+            <th>Área</th>
+            <th>Estado</th>
+            <th></th>
+          </tr>
         </thead>
         <tbody>
-          {usuarios.map((u) => (
-            <tr key={u.id}>
-              <td>{u.nombre}</td>
-              <td className="mono">{u.email}</td>
-              <td>
-                {roles.length === 0 ? (
-                  u.rol
-                ) : (
-                  <select className="select-rol" value={u.rol}
-                    onChange={(e) => cambiarRol(u, e.target.value)}>
-                    {roles.map((r) => (
-                      <option key={r.id} value={r.nombre}>{r.nombre}</option>
-                    ))}
-                  </select>
-                )}
-              </td>
-              <td>{areas.find((a) => a.id === u.area_id)?.nombre || "—"}</td>
-              <td>{u.activo ? "Activo" : "Inactivo"}</td>
-              <td>
-                <button className="btn-link" onClick={() => alternarActivo(u)}>
-                  {u.activo ? "Desactivar" : "Activar"}
-                </button>
+          {usuariosFiltrados.length === 0 ? (
+            <tr>
+              <td colSpan="5" className="vacio">
+                Sin resultados.
               </td>
             </tr>
-          ))}
+          ) : (
+            usuariosFiltrados.map((u) => (
+              <tr key={u.id}>
+                <td>
+                  <div className="fila-usuario">
+                    <div className="avatar" style={{ background: colorAvatar(u.nombre) }}>
+                      {iniciales(u.nombre)}
+                    </div>
+                    <div>
+                      <div className="prov">{u.nombre}</div>
+                      <div className="prov-nit">{u.email}</div>
+                    </div>
+                  </div>
+                </td>
+                <td>
+                  <span className={claseRol(roles, u.rol)}>{u.rol}</span>
+                </td>
+                <td>{areas.find((a) => a.id === u.area_id)?.nombre || "—"}</td>
+                <td>
+                  <span className={`badge ${u.activo ? "e-lista" : "e-nueva"}`}>
+                    {u.activo ? "Activo" : "Inactivo"}
+                  </span>
+                </td>
+                <td>
+                  <button className="btn-link" onClick={() => editarUsuario(u)}>
+                    Editar
+                  </button>
+                </td>
+              </tr>
+            ))
+          )}
         </tbody>
       </table>
+
+      <AnimatePresence>
+        {abierto && (
+          <motion.div
+            className="drawer-fondo"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            onClick={() => setAbierto(false)}
+          >
+            <motion.form
+              className="drawer-panel"
+              onClick={(e) => e.stopPropagation()}
+              onSubmit={guardar}
+              initial={{ x: 48, opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={{ x: 48, opacity: 0 }}
+              transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
+            >
+              <div className="drawer-cabecera">
+                <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                  <div className="avatar-grande" style={{ background: colorAvatar(form.nombre || "?") }}>
+                    {iniciales(form.nombre || "?")}
+                  </div>
+                  <div>
+                    <h3 style={{ margin: 0 }}>{editando ? "Editar usuario" : "Nuevo usuario"}</h3>
+                    <p className="ayuda" style={{ margin: 0 }}>
+                      {editando ? editando.email : "Crea el acceso al portal"}
+                    </p>
+                  </div>
+                </div>
+                <button type="button" className="drawer-cerrar" onClick={() => setAbierto(false)}>
+                  ✕
+                </button>
+              </div>
+
+              <div className="campo">
+                <label>Correo</label>
+                <input
+                  type="email"
+                  value={form.email}
+                  required
+                  disabled={!!editando}
+                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                />
+              </div>
+
+              <div className="campo">
+                <label>Nombre</label>
+                <input
+                  value={form.nombre}
+                  required
+                  onChange={(e) => setForm({ ...form, nombre: e.target.value })}
+                />
+              </div>
+
+              <div className="campo">
+                <label>Rol</label>
+                <div className="roles-grid">
+                  {rolesDisponibles.map((r) => (
+                    <div
+                      key={r.nombre}
+                      className={`rol-card ${form.rol === r.nombre ? "activo" : ""}`}
+                      onClick={() => setForm({ ...form, rol: r.nombre })}
+                    >
+                      <div className="rol-card-nombre">{r.nombre}</div>
+                      <div className="rol-card-permisos">
+                        {PERMISOS_ROL.filter(([campo]) => r[campo]).map(([campo, texto]) => (
+                          <span key={campo} className="badge permiso">
+                            {texto}
+                          </span>
+                        ))}
+                        {!PERMISOS_ROL.some(([campo]) => r[campo]) && (
+                          <span className="sin">solo su área</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="campo">
+                <label>Área</label>
+                <select value={form.area_id} onChange={(e) => setForm({ ...form, area_id: e.target.value })}>
+                  <option value="">Sin área</option>
+                  {areas.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.nombre}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="campo">
+                <label>{editando ? "Restablecer contraseña" : "Contraseña"}</label>
+                <div className="clave-campo">
+                  <input
+                    type={mostrarClave ? "text" : "password"}
+                    value={form.clave}
+                    placeholder={editando ? "dejar en blanco para no cambiarla" : ""}
+                    required={!editando}
+                    onChange={(e) => setForm({ ...form, clave: e.target.value })}
+                  />
+                  <div className="clave-acciones">
+                    <button
+                      type="button"
+                      className="clave-icono-btn"
+                      title="Generar contraseña segura"
+                      onClick={() => setForm({ ...form, clave: generarClave() })}
+                    >
+                      🎲
+                    </button>
+                    <button
+                      type="button"
+                      className="clave-icono-btn"
+                      title="Mostrar u ocultar"
+                      onClick={() => setMostrarClave((v) => !v)}
+                    >
+                      {mostrarClave ? "🙈" : "👁"}
+                    </button>
+                  </div>
+                </div>
+                {form.clave && (
+                  <>
+                    <div className="fuerza-barra">
+                      <div
+                        className="fuerza-relleno"
+                        style={{
+                          width: `${(fuerzaClave(form.clave) + 1) * 20}%`,
+                          background: FUERZA_COLORES[fuerzaClave(form.clave)],
+                        }}
+                      />
+                    </div>
+                    <span className="fuerza-texto">{FUERZA_TEXTOS[fuerzaClave(form.clave)]}</span>
+                  </>
+                )}
+              </div>
+
+              {editando && (
+                <label className="switch">
+                  <input
+                    type="checkbox"
+                    checked={form.activo}
+                    onChange={(e) => setForm({ ...form, activo: e.target.checked })}
+                  />
+                  <span className="switch-pista" />
+                  {form.activo ? "Usuario activo" : "Usuario inactivo"}
+                </label>
+              )}
+
+              {error && <div className="error">{error}</div>}
+
+              <div className="drawer-acciones">
+                <button type="button" className="btn-sec" onClick={() => setAbierto(false)}>
+                  Cancelar
+                </button>
+                <button className="btn" disabled={guardando}>
+                  {guardando ? "Guardando…" : editando ? "Guardar cambios" : "Crear usuario"}
+                </button>
+              </div>
+            </motion.form>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

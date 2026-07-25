@@ -14,7 +14,12 @@ export default function Layout() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="marca">Portal de Facturas</div>
+        <div className="marca">
+          <span className="marca-insignia">
+            <img src="/logo-kos.png" alt="KOS" />
+          </span>
+          <span>Portal de Facturas</span>
+        </div>
         <nav className="sidenav">
           <div className="nav-grupo">
             <div className="nav-titulo">General</div>

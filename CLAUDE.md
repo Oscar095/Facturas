@@ -180,9 +180,9 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
   desactualizada (no incluye `procesada`/`aprobada`) — no se usa en ningún otro lado del
   backend (verificado por grep), es inofensiva pero conviene corregirla o borrarla si se toca
   esa zona.
-- **`motion` (npm)**: se agregó a `frontend/package.json` pero **todavía no se usa** en ningún
-  componente (no hay `import ... from "motion"` en el código actual). Instalada para animaciones
-  futuras.
+- **`motion` (npm)**: se importa como `motion/react` (no `"motion"` a secas — ojo al buscarlo en
+  el código). En uso en `Login.jsx` (tagline animado) y `Admin.jsx` (`AnimatePresence` para los
+  modales de Roles/Áreas).
 
 ## Git
 
