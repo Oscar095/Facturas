@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { motion } from "motion/react";
 import { useAuth } from "../auth.jsx";
 
 export default function Login() {
@@ -16,7 +17,7 @@ export default function Login() {
     setCargando(true);
     try {
       await login(email, clave);
-      navigate("/facturas");
+      navigate("/");
     } catch (err) {
       setError(err.message || "No se pudo iniciar sesión");
     } finally {
@@ -26,29 +27,44 @@ export default function Login() {
 
   return (
     <div className="login-pagina">
-      <form className="login-caja" onSubmit={enviar}>
-        <h1>📄 Portal de Facturas</h1>
-        <p className="sub">Recepción de facturas electrónicas</p>
-        <label>Correo</label>
-        <input
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          autoFocus
-          required
-        />
-        <label>Contraseña</label>
-        <input
-          type="password"
-          value={clave}
-          onChange={(e) => setClave(e.target.value)}
-          required
-        />
-        {error && <div className="error">{error}</div>}
-        <button className="btn" disabled={cargando}>
-          {cargando ? "Ingresando…" : "Ingresar"}
-        </button>
-      </form>
+      <aside className="login-panel">
+        <div className="login-marca">Portal de Facturas</div>
+        <motion.p
+          className="login-tagline"
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
+        >
+          Cada factura, con su historia clara: quién la recibió, qué falta
+          y cuándo queda lista para contabilizar.
+        </motion.p>
+        <div className="login-pie">Recepción de facturas electrónicas · KOS</div>
+      </aside>
+      <div className="login-lado">
+        <form className="login-caja" onSubmit={enviar}>
+          <h1>Bienvenido</h1>
+          <p className="sub">Ingresa con tu correo y contraseña</p>
+          <label>Correo</label>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            autoFocus
+            required
+          />
+          <label>Contraseña</label>
+          <input
+            type="password"
+            value={clave}
+            onChange={(e) => setClave(e.target.value)}
+            required
+          />
+          {error && <div className="error">{error}</div>}
+          <button className="btn" disabled={cargando}>
+            {cargando ? "Ingresando…" : "Ingresar"}
+          </button>
+        </form>
+      </div>
     </div>
   );
 }

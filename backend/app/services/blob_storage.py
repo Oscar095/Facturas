@@ -24,6 +24,9 @@ class AlmacenLocal:
     def descargar(self, ruta: str) -> bytes:
         return (_LOCAL_BASE / ruta).read_bytes()
 
+    def eliminar(self, ruta: str) -> None:
+        (_LOCAL_BASE / ruta).unlink(missing_ok=True)
+
 
 class AlmacenAzure:
     def __init__(self, connection_string: str, contenedor: str):
@@ -47,6 +50,14 @@ class AlmacenAzure:
     def descargar(self, ruta: str) -> bytes:
         blob = self._svc.get_blob_client(self._contenedor, ruta)
         return blob.download_blob().readall()
+
+    def eliminar(self, ruta: str) -> None:
+        from azure.core.exceptions import ResourceNotFoundError
+
+        try:
+            self._svc.get_blob_client(self._contenedor, ruta).delete_blob()
+        except ResourceNotFoundError:
+            pass  # ya no existe
 
 
 def get_almacen():

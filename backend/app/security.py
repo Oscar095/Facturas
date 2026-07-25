@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import get_db
-from .models import Usuario
+from .models import Rol, Usuario
 
 _ITERACIONES = 200_000
 oauth2 = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
@@ -67,6 +67,42 @@ def usuario_actual(token: str = Depends(oauth2), db: Session = Depends(get_db)) 
 def requiere_rol(*roles: str):
     def dependencia(usuario: Usuario = Depends(usuario_actual)) -> Usuario:
         if usuario.rol not in roles:
+            raise HTTPException(status_code=403, detail="No autorizado para esta acción")
+        return usuario
+
+    return dependencia
+
+
+# ── permisos por rol (tabla roles) ──────────────────────────────────────────────
+PERMISOS = ("ver_todas_areas", "editar_facturas", "aprobar", "contabilizar", "administrar")
+
+# Comportamiento histórico de los roles originales. Es también el respaldo si la
+# fila del rol no existe en la tabla (p. ej. antes de la primera siembra).
+PERMISOS_LEGADO = {
+    "admin": dict.fromkeys(PERMISOS, True),
+    "contabilidad": {**dict.fromkeys(PERMISOS, True), "administrar": False},
+    "area": {**dict.fromkeys(PERMISOS, False), "aprobar": True},
+}
+
+
+def permisos_de(db: Session, usuario: Usuario) -> dict[str, bool]:
+    rol = db.execute(select(Rol).where(Rol.nombre == usuario.rol)).scalar_one_or_none()
+    if rol is not None:
+        return {p: bool(getattr(rol, p)) for p in PERMISOS}
+    # Rol sin fila ni equivalente legado: sin permisos y limitado a su área.
+    return PERMISOS_LEGADO.get(usuario.rol, dict.fromkeys(PERMISOS, False))
+
+
+def tiene_permiso(db: Session, usuario: Usuario, *nombres: str) -> bool:
+    """True si el rol del usuario tiene ALGUNO de los permisos indicados."""
+    permisos = permisos_de(db, usuario)
+    return any(permisos.get(n, False) for n in nombres)
+
+
+def requiere_permiso(*nombres: str):
+    def dependencia(usuario: Usuario = Depends(usuario_actual),
+                    db: Session = Depends(get_db)) -> Usuario:
+        if not tiene_permiso(db, usuario, *nombres):
             raise HTTPException(status_code=403, detail="No autorizado para esta acción")
         return usuario
 

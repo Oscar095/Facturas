@@ -27,6 +27,7 @@ from ..config import settings
 from ..models import Documento, Ejecucion, Evento, Factura, Proveedor, ahora
 from ..services import reglas
 from ..services.blob_storage import get_almacen
+from ..services.pdf_texto import extraer_texto
 from .siesa_client import DocumentoPortal, SiesaClient
 
 log = logging.getLogger("ingesta")
@@ -76,6 +77,8 @@ def _crear_factura(db: Session, doc: DocumentoPortal, siesa: SiesaClient, almace
         estado_portal=doc.estado_adquiriente,
         estado_proceso="nueva",
         blob_pdf=ruta,
+        # texto de la factura para evaluar patrones de ítem (reglas de área)
+        texto_pdf=extraer_texto(pdf),
     )
     db.add(factura)
     db.flush()

@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import Documento, Evento, Factura, TIPOS_DOCUMENTO, Usuario
 from ..schemas import FacturaDetalle
-from ..security import usuario_actual
+from ..security import tiene_permiso, usuario_actual
 from ..services import reglas
 from ..services.blob_storage import get_almacen
 
@@ -29,7 +29,7 @@ def subir_documento(
     factura = db.get(Factura, factura_id)
     if factura is None:
         raise HTTPException(404, "Factura no encontrada")
-    if usuario.rol == "area" and factura.area_id != usuario.area_id:
+    if not tiene_permiso(db, usuario, "ver_todas_areas") and factura.area_id != usuario.area_id:
         raise HTTPException(403, "No autorizado para cargar en esta factura")
 
     datos = archivo.file.read()
@@ -68,7 +68,7 @@ def eliminar_documento(documento_id: int, db: Session = Depends(get_db),
     if doc.tipo == "FV":
         raise HTTPException(400, "La factura de venta no se puede eliminar")
     factura = db.get(Factura, doc.factura_id)
-    if usuario.rol == "area" and factura.area_id != usuario.area_id:
+    if not tiene_permiso(db, usuario, "ver_todas_areas") and factura.area_id != usuario.area_id:
         raise HTTPException(403, "No autorizado")
     db.delete(doc)
     db.add(Evento(factura_id=factura.id, usuario_id=usuario.id, accion="elimina_documento",

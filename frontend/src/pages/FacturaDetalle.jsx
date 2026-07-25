@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, getToken } from "../api";
 import { useAuth } from "../auth.jsx";
-import { badgeEstado, formatoFecha, formatoPesos } from "../util";
+import { badgeEstado, formatoFecha, formatoPesos, tienePermiso } from "../util";
 
 const TIPOS_CARGA = [
   { valor: "OCN", texto: "Orden de Compra (OCN)" },
@@ -23,15 +23,17 @@ export default function FacturaDetalle() {
   const [tipoCarga, setTipoCarga] = useState("OCN");
   const archivoRef = useRef();
 
-  const esGestion = usuario?.rol === "admin" || usuario?.rol === "contabilidad";
+  const puedeEditar = tienePermiso(usuario, "editar_facturas");
+  const puedeAprobar = tienePermiso(usuario, "aprobar");
+  const puedeContabilizar = tienePermiso(usuario, "contabilizar");
 
   function cargar() {
     api.get(`/api/facturas/${id}`).then(setFactura).catch((e) => setError(e.message));
   }
   useEffect(cargar, [id]);
   useEffect(() => {
-    if (esGestion) api.get("/api/areas").then(setAreas).catch(() => setAreas([]));
-  }, [esGestion]);
+    if (puedeEditar) api.get("/api/areas").then(setAreas).catch(() => setAreas([]));
+  }, [puedeEditar]);
 
   async function cambiarArea(e) {
     const area_id = Number(e.target.value);
@@ -73,6 +75,49 @@ export default function FacturaDetalle() {
       setFactura(await api.del(`/api/documentos/${docId}`));
     } catch (err) {
       setError(err.message);
+    }
+  }
+
+  async function procesar() {
+    const mensaje = factura.faltantes?.length
+      ? `Según las reglas faltan: ${factura.faltantes.join(", ")}.\n\n¿Confirmas que esta factura NO requiere esos documentos y ya está lista para contabilizar?`
+      : "¿Confirmas que los documentos están completos y la factura queda lista para contabilizar?";
+    if (!confirm(mensaje)) return;
+    setError("");
+    try {
+      setFactura(await api.post(`/api/facturas/${id}/procesar`));
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  const [panelAprobar, setPanelAprobar] = useState(false);
+  const [firmas, setFirmas] = useState([]);
+  const [firmaSel, setFirmaSel] = useState("");
+  const [aprobando, setAprobando] = useState(false);
+
+  async function abrirAprobacion() {
+    setError("");
+    try {
+      const lista = await api.get("/api/firmas");
+      setFirmas(lista);
+      setFirmaSel(lista.length ? String(lista[0].id) : "");
+      setPanelAprobar(true);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function aprobar() {
+    setAprobando(true);
+    setError("");
+    try {
+      setFactura(await api.post(`/api/facturas/${id}/aprobar`, { firma_id: Number(firmaSel) }));
+      setPanelAprobar(false);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setAprobando(false);
     }
   }
 
@@ -127,7 +172,7 @@ export default function FacturaDetalle() {
         </div>
         <div>
           <span className="etiqueta">Área</span>
-          {esGestion ? (
+          {puedeEditar ? (
             <select
               className="select-area"
               value={factura.area?.id || ""}
@@ -155,11 +200,13 @@ export default function FacturaDetalle() {
 
       {error && <div className="error">{error}</div>}
 
-      {factura.faltantes?.length > 0 && (
-        <div className="aviso">
-          ⚠️ Faltan documentos para contabilizar: <b>{factura.faltantes.join(", ")}</b>
-        </div>
-      )}
+      {factura.faltantes?.length > 0 &&
+        !["procesada", "aprobada", "contabilizada"].includes(factura.estado_proceso) && (
+          <div className="aviso">
+            ⚠️ Según las reglas faltan: <b>{factura.faltantes.join(", ")}</b> — si esta
+            factura no los requiere, puedes procesarla de todas formas.
+          </div>
+        )}
 
       <h2>Documentos</h2>
       <table className="tabla">
@@ -219,7 +266,52 @@ export default function FacturaDetalle() {
           </div>
         </form>
 
-        {esGestion && factura.estado_proceso === "lista_contabilizar" && (
+        {puedeAprobar &&
+          ["asignada", "docs_pendientes", "lista_contabilizar"].includes(factura.estado_proceso) &&
+          factura.area && (
+            <button className="btn" onClick={procesar}>
+              ✓ Procesar
+            </button>
+          )}
+        {puedeAprobar && factura.estado_proceso === "procesada" && !panelAprobar && (
+          <button className="btn exito" onClick={abrirAprobacion}>
+            ✍️ Aprobar factura
+          </button>
+        )}
+        {panelAprobar && (
+          <div className="aprobar-panel">
+            <h3>Firmar y aprobar</h3>
+            <p className="ayuda">
+              Tu firma se estampará en todas las páginas de cada documento PDF
+              adjunto (FV, OCN, OCS, CRN), en la esquina inferior derecha.
+            </p>
+            {firmas.length === 0 ? (
+              <p className="ayuda">
+                No tienes firmas guardadas. Súbela primero en{" "}
+                <Link to="/firmas">Mis Firmas</Link>.
+              </p>
+            ) : (
+              <select value={firmaSel} onChange={(e) => setFirmaSel(e.target.value)}>
+                {firmas.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.nombre} ({f.nombre_archivo})
+                  </option>
+                ))}
+              </select>
+            )}
+            <div className="aprobar-acciones">
+              {firmas.length > 0 && (
+                <button className="btn exito" onClick={aprobar} disabled={aprobando}>
+                  {aprobando ? "Firmando…" : "Firmar y aprobar"}
+                </button>
+              )}
+              <button className="btn-sec" onClick={() => setPanelAprobar(false)} disabled={aprobando}>
+                Cancelar
+              </button>
+            </div>
+          </div>
+        )}
+        {puedeContabilizar && factura.estado_proceso === "aprobada" && (
           <button className="btn exito" onClick={contabilizar}>
             ✓ Marcar como contabilizada
           </button>

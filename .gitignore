@@ -32,3 +32,4 @@ desktop.ini
 
 # Claude Code (local, no compartir)
 .claude/settings.local.json
+.claude/skills/

@@ -3,6 +3,8 @@ export const ESTADOS = {
   asignada: { texto: "Asignada", clase: "e-asignada" },
   docs_pendientes: { texto: "Docs pendientes", clase: "e-pendiente" },
   lista_contabilizar: { texto: "Lista para contabilizar", clase: "e-lista" },
+  procesada: { texto: "Procesada", clase: "e-procesada" },
+  aprobada: { texto: "Aprobada", clase: "e-aprobada" },
   contabilizada: { texto: "Contabilizada", clase: "e-contabilizada" },
 };
 
@@ -18,6 +20,30 @@ const pesos = new Intl.NumberFormat("es-CO", {
 export function formatoPesos(v) {
   if (v == null) return "—";
   return pesos.format(Number(v));
+}
+
+const pesosCompacto = new Intl.NumberFormat("es-CO", {
+  style: "currency",
+  currency: "COP",
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+export function formatoPesosCompacto(v) {
+  if (v == null) return "—";
+  return pesosCompacto.format(Number(v));
+}
+
+// Permisos del rol (los envía /api/auth/yo). El respaldo por nombre de rol
+// cubre sesiones cargadas antes de que existieran los permisos configurables.
+const PERMISOS_LEGADO = {
+  admin: { ver_todas_areas: true, editar_facturas: true, aprobar: true, contabilizar: true, administrar: true },
+  contabilidad: { ver_todas_areas: true, editar_facturas: true, aprobar: true, contabilizar: true },
+  area: { aprobar: true },
+};
+export function tienePermiso(usuario, permiso) {
+  if (!usuario) return false;
+  if (usuario.permisos) return !!usuario.permisos[permiso];
+  return !!PERMISOS_LEGADO[usuario.rol]?.[permiso];
 }
 
 export function formatoFecha(v) {

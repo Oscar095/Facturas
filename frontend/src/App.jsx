@@ -1,16 +1,21 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout.jsx";
 import { useAuth } from "./auth.jsx";
+import { tienePermiso } from "./util";
 import Login from "./pages/Login.jsx";
+import Dashboard from "./pages/Dashboard.jsx";
 import Facturas from "./pages/Facturas.jsx";
 import FacturaDetalle from "./pages/FacturaDetalle.jsx";
+import MisFirmas from "./pages/MisFirmas.jsx";
 import Admin from "./pages/Admin.jsx";
 
-function Privada({ children, roles }) {
+function Privada({ children, roles, permiso }) {
   const { usuario, cargando } = useAuth();
   if (cargando) return <div className="cargando">Cargando…</div>;
   if (!usuario) return <Navigate to="/login" replace />;
   if (roles && !roles.includes(usuario.rol))
+    return <Navigate to="/facturas" replace />;
+  if (permiso && !tienePermiso(usuario, permiso))
     return <Navigate to="/facturas" replace />;
   return children;
 }
@@ -26,19 +31,20 @@ export default function App() {
           </Privada>
         }
       >
-        <Route index element={<Navigate to="/facturas" replace />} />
+        <Route index element={<Dashboard />} />
         <Route path="/facturas" element={<Facturas />} />
         <Route path="/facturas/:id" element={<FacturaDetalle />} />
+        <Route path="/firmas" element={<MisFirmas />} />
         <Route
           path="/admin"
           element={
-            <Privada roles={["admin"]}>
+            <Privada permiso="administrar">
               <Admin />
             </Privada>
           }
         />
       </Route>
-      <Route path="*" element={<Navigate to="/facturas" replace />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }

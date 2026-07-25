@@ -11,3 +11,6 @@ httpx==0.28.*
 pyjwt==2.10.*
 python-multipart==0.0.*
 openpyxl==3.1.*
+pypdf==5.*
+anthropic==0.*
+reportlab==4.*

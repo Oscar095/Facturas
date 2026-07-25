@@ -41,6 +41,8 @@ class Settings:
     jwt_secret: str = _env("JWT_SECRET", default="cambia-esta-clave-en-produccion")
     jwt_expira_minutos: int = int(_env("JWT_EXPIRA_MINUTOS", default="480"))
     jobs_api_key: str = _env("JOBS_API_KEY", default="")
+    # IA (Claude) — última opción para asignar área cuando las reglas no deciden
+    anthropic_api_key: str = _env("API_KEY_IA_CLAUDE", "ANTHROPIC_API_KEY")
 
     # Driver ODBC a usar para SQL Server (18 o 17)
     odbc_driver: str = _env("ODBC_DRIVER", default="ODBC Driver 18 for SQL Server")

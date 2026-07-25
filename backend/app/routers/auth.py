@@ -5,8 +5,8 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import Usuario
-from ..schemas import CambioClave, Token, UsuarioOut
-from ..security import crear_token, hash_clave, usuario_actual, verificar_clave
+from ..schemas import CambioClave, Token, UsuarioYo
+from ..security import crear_token, hash_clave, permisos_de, usuario_actual, verificar_clave
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -25,9 +25,11 @@ def login(datos: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(ge
     )
 
 
-@router.get("/yo", response_model=UsuarioOut)
-def yo(usuario: Usuario = Depends(usuario_actual)):
-    return usuario
+@router.get("/yo", response_model=UsuarioYo)
+def yo(usuario: Usuario = Depends(usuario_actual), db: Session = Depends(get_db)):
+    salida = UsuarioYo.model_validate(usuario)
+    salida.permisos = permisos_de(db, usuario)
+    return salida
 
 
 @router.post("/cambiar-clave")

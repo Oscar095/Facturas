@@ -26,6 +26,30 @@ TIPOS_DOCUMENTO = ("FV", "OCN", "OCS", "CRN", "OTRO")
 ROLES = ("admin", "contabilidad", "area")
 
 
+class Rol(Base):
+    """Rol de usuario con permisos configurables desde Administración.
+
+    Los tres roles originales (admin, contabilidad, area) se siembran al arrancar
+    como roles de sistema: no se editan ni se eliminan, y sus permisos replican el
+    comportamiento histórico. `Usuario.rol` guarda el NOMBRE del rol (sin FK, para
+    no alterar la tabla usuarios que ya está en producción).
+    """
+
+    __tablename__ = "roles"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    nombre: Mapped[str] = mapped_column(String(20), unique=True)
+    descripcion: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    # Permisos (ver security.PERMISOS): sin ver_todas_areas el usuario queda
+    # limitado a las facturas de su área.
+    ver_todas_areas: Mapped[bool] = mapped_column(default=False)
+    editar_facturas: Mapped[bool] = mapped_column(default=False)  # área/orden/responsable
+    aprobar: Mapped[bool] = mapped_column(default=True)           # procesar y aprobar (firma)
+    contabilizar: Mapped[bool] = mapped_column(default=False)
+    administrar: Mapped[bool] = mapped_column(default=False)      # usuarios, áreas, reglas, robot, roles
+    es_sistema: Mapped[bool] = mapped_column(default=False)
+
+
 class Proveedor(Base):
     __tablename__ = "proveedores"
 
@@ -110,6 +134,8 @@ class Factura(Base):
     responsable_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
     blob_pdf: Mapped[str | None] = mapped_column(String(500), nullable=True)
     blob_xml: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Texto extraído del PDF (pypdf) — base para los patrones de ítem de reglas_area
+    texto_pdf: Mapped[str | None] = mapped_column(Text, nullable=True)
     creado_en: Mapped[datetime] = mapped_column(DateTime, default=ahora)
     actualizado_en: Mapped[datetime] = mapped_column(DateTime, default=ahora, onupdate=ahora)
 
@@ -133,6 +159,25 @@ class Documento(Base):
 
     factura: Mapped[Factura] = relationship(back_populates="documentos")
     subido_por: Mapped[Usuario | None] = relationship()
+
+
+class Firma(Base):
+    """Firma digital (imagen) de un usuario, para firmar aprobaciones.
+
+    Estrictamente privada: solo su dueño puede verla y usarla — sin excepción
+    para el rol admin. Todo acceso debe filtrar por usuario_id.
+    """
+
+    __tablename__ = "firmas"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    usuario_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id"), index=True)
+    nombre: Mapped[str] = mapped_column(String(200))  # etiqueta ("Firma principal")
+    blob_path: Mapped[str] = mapped_column(String(500))
+    nombre_archivo: Mapped[str] = mapped_column(String(300))
+    creado_en: Mapped[datetime] = mapped_column(DateTime, default=ahora)
+
+    usuario: Mapped[Usuario] = relationship()
 
 
 class Evento(Base):

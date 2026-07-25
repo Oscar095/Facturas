@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../auth.jsx";
-import { badgeEstado, formatoFecha, formatoPesos, ESTADOS } from "../util";
+import { badgeEstado, formatoFecha, formatoPesos, tienePermiso, ESTADOS } from "../util";
 
 export default function Facturas() {
   const { usuario } = useAuth();
@@ -62,7 +62,7 @@ export default function Facturas() {
             </option>
           ))}
         </select>
-        {usuario?.rol !== "area" && (
+        {tienePermiso(usuario, "ver_todas_areas") && (
           <select value={filtros.area_id} onChange={(e) => set("area_id", e.target.value)}>
             <option value="">Todas las áreas</option>
             {areas.map((a) => (
@@ -109,10 +109,10 @@ export default function Facturas() {
                 </td>
               </tr>
             ) : (
-              data.items.map((f) => {
+              data.items.map((f, i) => {
                 const b = badgeEstado(f.estado_proceso);
                 return (
-                  <tr key={f.id} onClick={() => navigate(`/facturas/${f.id}`)}>
+                  <tr key={f.id} style={{ "--i": i }} onClick={() => navigate(`/facturas/${f.id}`)}>
                     <td className="mono">{f.numero}</td>
                     <td>
                       <div className="prov">{f.proveedor.razon_social}</div>

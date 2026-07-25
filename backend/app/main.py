@@ -9,9 +9,9 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .database import Base, SessionLocal, crear_esquema_si_falta, engine
-from .models import Usuario
-from .routers import areas, auth, documentos, facturas, jobs, panel, usuarios
-from .security import hash_clave
+from .models import Rol, Usuario
+from .routers import areas, auth, documentos, facturas, firmas, jobs, panel, roles, usuarios
+from .security import PERMISOS_LEGADO, hash_clave
 
 logging.basicConfig(level=logging.INFO)
 
@@ -25,7 +25,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-for r in (auth, facturas, documentos, areas, usuarios, jobs, panel):
+for r in (auth, facturas, documentos, areas, usuarios, jobs, panel, firmas, roles):
     app.include_router(r.router)
 
 
@@ -34,12 +34,30 @@ def health():
     return {"ok": True}
 
 
+_DESCRIPCION_ROLES = {
+    "admin": "Acceso total: administración, facturas y contabilización",
+    "contabilidad": "Ve todas las áreas, edita facturas, aprueba y contabiliza",
+    "area": "Solo su área: carga documentos, procesa y aprueba",
+}
+
+
+def _sembrar_roles(db):
+    """Crea los roles de sistema si faltan (idempotente, corre en cada arranque)."""
+    existentes = {r.nombre for r in db.query(Rol).all()}
+    for nombre, permisos in PERMISOS_LEGADO.items():
+        if nombre not in existentes:
+            db.add(Rol(nombre=nombre, descripcion=_DESCRIPCION_ROLES[nombre],
+                       es_sistema=True, **permisos))
+    db.commit()
+
+
 def _crear_tablas_y_admin():
     crear_esquema_si_falta()
     Base.metadata.create_all(engine)
     # Semilla del admin inicial (solo si no hay usuarios)
     db = SessionLocal()
     try:
+        _sembrar_roles(db)
         if db.query(Usuario).count() == 0:
             email = os.getenv("ADMIN_EMAIL", "admin@local")
             clave = os.getenv("ADMIN_PASSWORD", "admin1234")

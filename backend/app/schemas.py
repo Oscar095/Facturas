@@ -44,6 +44,37 @@ class UsuarioOut(UsuarioBase):
     activo: bool
 
 
+class UsuarioYo(UsuarioOut):
+    """Respuesta de /api/auth/yo: el usuario más los permisos de su rol."""
+    permisos: dict[str, bool] = {}
+
+
+class RolBase(BaseModel):
+    nombre: str
+    descripcion: str | None = None
+    ver_todas_areas: bool = False
+    editar_facturas: bool = False
+    aprobar: bool = True
+    contabilizar: bool = False
+    administrar: bool = False
+
+
+class RolActualizar(BaseModel):
+    descripcion: str | None = None
+    ver_todas_areas: bool | None = None
+    editar_facturas: bool | None = None
+    aprobar: bool | None = None
+    contabilizar: bool | None = None
+    administrar: bool | None = None
+
+
+class RolOut(RolBase):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    es_sistema: bool
+    en_uso: int = 0  # cuántos usuarios tienen este rol
+
+
 class AreaBase(BaseModel):
     nombre: str
     activa: bool = True
@@ -69,6 +100,15 @@ class DocumentoOut(BaseModel):
     fecha: datetime
 
 
+class FirmaOut(BaseModel):
+    """Firma del usuario logeado (nunca expone blob_path ni firmas ajenas)."""
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    nombre: str
+    nombre_archivo: str
+    creado_en: datetime
+
+
 class ReglaAreaBase(BaseModel):
     proveedor_nit: str | None = None
     proveedor_nombre: str | None = None
@@ -80,6 +120,15 @@ class ReglaAreaBase(BaseModel):
 class ReglaAreaOut(ReglaAreaBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
+
+
+class ReglaAreaPatch(BaseModel):
+    """Edición parcial de una regla (solo se tocan los campos enviados)."""
+    proveedor_nit: str | None = None
+    proveedor_nombre: str | None = None
+    patron_item: str | None = None
+    area_id: int | None = None
+    responsable_id: int | None = None
 
 
 class FacturaResumen(BaseModel):
@@ -107,6 +156,11 @@ class FacturaActualizar(BaseModel):
     tipo_orden: str | None = None      # OCN | OCS
     area_id: int | None = None
     responsable_id: int | None = None
+
+
+class AprobarIn(BaseModel):
+    """Aprobación de factura: con qué firma del usuario se sellan los documentos."""
+    firma_id: int
 
 
 class PaginaFacturas(BaseModel):
