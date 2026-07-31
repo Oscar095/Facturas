@@ -57,7 +57,9 @@
       "Bash(PYTHONUTF8=1 ./.venv/Scripts/python.exe scripts/reevaluar.py)",
       "Bash(PYTHONUTF8=1 ./.venv/Scripts/python.exe scripts/probar_reglas.py)",
       "Bash(mkdir -p \"/c/Users/oscaro/AppData/Local/Temp/claude/c--Users-oscaro-Facturas/21d85e9b-94ad-491d-9208-6bbef7187859/scratchpad/ui3\")",
-      "Bash(PYTHONUTF8=1 ./.venv/Scripts/python.exe scripts/probar_ui.py \"C:\\\\Users\\\\oscaro\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-oscaro-Facturas\\\\21d85e9b-94ad-491d-9208-6bbef7187859\\\\scratchpad\\\\ui3\")"
+      "Bash(PYTHONUTF8=1 ./.venv/Scripts/python.exe scripts/probar_ui.py \"C:\\\\Users\\\\oscaro\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-oscaro-Facturas\\\\21d85e9b-94ad-491d-9208-6bbef7187859\\\\scratchpad\\\\ui3\")",
+      "Bash(nohup ../.venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000)",
+      "Bash(curl -s -o /dev/null -w \"backend status: %{http_code}\\\\n\" http://127.0.0.1:8000/)"
     ]
   }
 }

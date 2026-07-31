@@ -13,6 +13,14 @@ para revisar estado, asignar áreas responsables y cargar los documentos que fal
 contabilizar. n8n dispara la ingesta a diario por HTTP.
 
 Flujo: `n8n → POST /api/jobs/sync → ingesta Playwright (portal Siesa) → Blob + SQL`.
+La ingesta trae 3 tipos de documento en la misma sesión de navegador
+(`filters[tipoDocRecepcion]`): **Facturas** (`tipo_doc=1`) y **Documentos Equivalentes**
+(`tipo_doc=20`) van a la tabla `facturas` diferenciados por la columna
+`tipo_documento` (`FACTURA|EQUIVALENTE`) — un Equivalente reemplaza funcionalmente a la FV,
+mismo flujo de área/completitud/aprobación. Las **Notas Crédito** (`tipo_doc=91`) van a la
+tabla aparte `notas_credito` (solo consulta: sin área ni flujo de aprobación; endpoint
+`/api/notas-credito` protegido con permiso `ver_todas_areas`; blobs en
+`notas_credito/AAAA/MM/`). No se extraen Notas Débito (`92`) — no se ha pedido.
 
 ## Entorno de ejecución (IMPORTANTE)
 
@@ -56,11 +64,16 @@ Esto es lo más frágil del proyecto. Ya resuelto, pero entiéndelo antes de toc
    actual y **buscar por CUFE un documento de días anteriores devuelve 0 filas**. Solución:
    `_fijar_rango_fecha()` escribe con eventos `input`/`change`, y `descargar_pdf(cufe, fecha)`
    acota la grilla **al día del documento** antes de buscar por CUFE.
-3. **Modales atascados tumban la corrida en cascada.** Si un PDF tarda y queda un modal
+3. **La grilla tiene su PROPIO selector de tipo de documento** (`select#tipoDocRecepcion`,
+   arranca en Factura). El listado por HTTP filtra por tipo vía parámetro, pero la
+   descarga de PDF va por la UI: si no se fija el selector al tipo del documento
+   (`_fijar_tipo_documento`), buscar por CUFE un Equivalente (20) o una Nota Crédito (91)
+   devuelve 0 filas aunque exista. `descargar_pdf(cufe, fecha, tipo_doc=...)` lo hace.
+4. **Modales atascados tumban la corrida en cascada.** Si un PDF tarda y queda un modal
    abierto, su backdrop tapa el botón "Buscar" del siguiente documento y fallan todos.
    `_cerrar_modales()` se llama antes de cada descarga (cierre amable + red de seguridad por JS
    que oculta modales/backdrops residuales). `descargar_pdf` además **reintenta hasta 3 veces**.
-4. La sincronización es **idempotente**: dedup por CUFE (`_existe_cufe`). Reejecutar el mismo
+5. La sincronización es **idempotente**: dedup por CUFE (`_existe_cufe`). Reejecutar el mismo
    rango no duplica nada. Un fallo por-documento hace `rollback` de esa factura y **continúa**
    con las demás (no aborta la corrida).
 
@@ -99,8 +112,9 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
   los documentos son suficientes, **aunque haya faltantes según las reglas** (hay facturas que
   no requieren todos los documentos); requiere área asignada. **Aprobar**
   (`POST /{id}/aprobar`, body `{firma_id}`): solo desde `procesada`; re-verifica que la firma
-  sea del usuario (404 si no) y **estampa la firma en todos los PDF adjuntos** de tipo
-  FV/OCN/OCS/CRN (no OTRO) — en TODAS las páginas, abajo a la derecha, con texto
+  sea del usuario (404 si no) y **estampa la firma en TODOS los documentos PDF adjuntos,
+  sin importar su tipo** (los no-PDF se omiten y queda anotado en el evento) — en TODAS
+  las páginas, abajo a la derecha, con texto
   "Aprobado por … — fecha" (`services/firmar_pdf.py`, pypdf+reportlab). El sellado se sube como blob nuevo
   `*_firmado.pdf` (el original queda en el Blob por trazabilidad) y se actualizan
   `documento.blob_path` y `factura.blob_pdf` (la FV comparte ruta). Documentos no-PDF se
@@ -141,6 +155,13 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
   firma ajena responde 404 (no 403, para no revelar existencia). Al eliminar se borra también
   el blob (`eliminar()` en blob_storage). No romper esto al construir el flujo de firmado:
   verificar propiedad de `firma_id` otra vez en el momento de firmar.
+
+## Listado de facturas
+
+- `GET /api/facturas` filtra por `fecha_desde`/`fecha_hasta` sobre **`fecha_emision`** (no
+  `fecha_recepcion`): la emisión se guarda tal cual la entrega el portal (hora local de
+  Colombia), así que se compara directo. NO "corregir" esto a `fecha_recepcion` sin aplicar
+  el desfase de Bogotá (esa columna sí está en UTC — ver gotcha del Dashboard).
 
 ## Dashboard (`/`, página de inicio)
 

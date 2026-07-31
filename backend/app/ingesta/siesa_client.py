@@ -242,27 +242,43 @@ class SiesaClient:
             )
             loc.press("Escape")  # cerrar el calendario si se abrió
 
+    # ── tipo de documento en la grilla ─────────────────────────────────────────
+    def _fijar_tipo_documento(self, tipo_doc: str):
+        """Fija el selector 'Tipo Documento' de la grilla (select#tipoDocRecepcion).
+
+        La grilla tiene su propio selector de tipo, que arranca en Factura (1):
+        si no se fija, buscar por CUFE un Documento Equivalente (20) o una Nota
+        Crédito (91) devuelve 0 filas aunque el documento exista.
+        """
+        sel = self.page.locator("select#tipoDocRecepcion").first
+        if sel.input_value() != tipo_doc:
+            sel.select_option(tipo_doc)
+            time.sleep(0.3)
+
     # ── descarga de PDF ────────────────────────────────────────────────────────
-    def descargar_pdf(self, cufe: str, fecha: datetime | None = None) -> bytes:
+    def descargar_pdf(self, cufe: str, fecha: datetime | None = None,
+                      tipo_doc: str = "1") -> bytes:
         """Filtra por CUFE, abre 'Ver PDF' y devuelve los bytes del PDF.
 
         `fecha` es la fecha del documento: se usa para acotar la grilla a ese
         día antes de buscar por CUFE (si no, la grilla queda en 'hoy' y no
-        encuentra documentos de días anteriores).
+        encuentra documentos de días anteriores). `tipo_doc` debe coincidir con
+        el tipo del documento (1=Factura, 91=Nota Crédito, 20=Doc Equivalente).
         """
         ultimo_error: Exception | None = None
         for intento in range(3):
             try:
-                return self._descargar_pdf_una_vez(cufe, fecha)
+                return self._descargar_pdf_una_vez(cufe, fecha, tipo_doc)
             except Exception as e:  # noqa: BLE001 — reintentar ante lentitud/modales del portal
                 ultimo_error = e
                 self._cerrar_modales()
                 time.sleep(2)
         raise ultimo_error  # type: ignore[misc]
 
-    def _descargar_pdf_una_vez(self, cufe: str, fecha: datetime | None) -> bytes:
+    def _descargar_pdf_una_vez(self, cufe: str, fecha: datetime | None, tipo_doc: str) -> bytes:
         p = self.page
         self._cerrar_modales()  # limpiar cualquier modal dejado por el doc anterior
+        self._fijar_tipo_documento(tipo_doc)
         if fecha is not None:
             self._fijar_rango_fecha(fecha, fecha)
         caja_cufe = p.locator("input[placeholder*='CUFE' i]").first

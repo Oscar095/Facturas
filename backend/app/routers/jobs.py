@@ -38,7 +38,7 @@ def lanzar_sync(
         resumen = sincronizar(db, dias=dias, fecha_desde=desde, fecha_hasta=hasta)
         return ResumenSync(**{k: resumen[k] for k in
                               ("ejecucion_id", "estado", "facturas_nuevas",
-                               "errores", "sin_area_asignada")})
+                               "notas_credito_nuevas", "errores", "sin_area_asignada")})
     background.add_task(_correr_sync, dias, desde, hasta)
     return ResumenSync(ejecucion_id=0, estado="en_curso", facturas_nuevas=0,
                        errores=0, sin_area_asignada=[])

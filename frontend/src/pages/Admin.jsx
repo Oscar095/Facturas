@@ -139,17 +139,25 @@ function Roles() {
     }
   }
 
-  function ChecksPermisos({ valor, onCambio }) {
-    return PERMISOS_ROL.map(([campo, texto, ayuda]) => (
-      <label key={campo} className="check" title={ayuda}>
-        <input
-          type="checkbox"
-          checked={!!valor[campo]}
-          onChange={(e) => onCambio({ ...valor, [campo]: e.target.checked })}
-        />
-        {texto}
-      </label>
-    ));
+  function ChecksPermisos({ valor, onCambio, bloqueados = [] }) {
+    return PERMISOS_ROL.map(([campo, texto, ayuda]) => {
+      const bloqueado = bloqueados.includes(campo);
+      return (
+        <label
+          key={campo}
+          className="check"
+          title={bloqueado ? "El rol admin siempre debe poder administrar" : ayuda}
+        >
+          <input
+            type="checkbox"
+            checked={!!valor[campo]}
+            disabled={bloqueado}
+            onChange={(e) => onCambio({ ...valor, [campo]: e.target.checked })}
+          />
+          {texto}
+        </label>
+      );
+    });
   }
 
   return (
@@ -168,9 +176,10 @@ function Roles() {
         </div>
       </form>
       <p className="ayuda">
-        Nombre en minúsculas, sin espacios (2–20 caracteres). Los roles de sistema
-        (admin, contabilidad, area) no se pueden editar ni eliminar. Un rol solo se
-        puede eliminar cuando ningún usuario lo tiene asignado.
+        Nombre en minúsculas, sin espacios (2–20 caracteres), no se puede cambiar luego.
+        Los roles de sistema (admin, contabilidad, area) se pueden editar pero no
+        eliminar; al rol admin no se le puede quitar el permiso "Administrar". Un rol
+        solo se puede eliminar cuando ningún usuario lo tiene asignado.
       </p>
       {error && <div className="error">{error}</div>}
 
@@ -197,7 +206,8 @@ function Roles() {
                     onChange={(e) => setEdit({ ...edit, descripcion: e.target.value })} />
                 </td>
                 <td className="permisos-checks">
-                  <ChecksPermisos valor={edit} onCambio={setEdit} />
+                  <ChecksPermisos valor={edit} onCambio={setEdit}
+                    bloqueados={r.nombre === "admin" ? ["administrar"] : []} />
                 </td>
                 <td>{r.en_uso}</td>
                 <td>
@@ -224,9 +234,9 @@ function Roles() {
                 </td>
                 <td>{r.en_uso}</td>
                 <td>
+                  <button className="btn-link" onClick={() => empezarEdicion(r)}>Editar</button>{" "}
                   {!r.es_sistema && (
                     <>
-                      <button className="btn-link" onClick={() => empezarEdicion(r)}>Editar</button>{" "}
                       <button className="btn-link peligro" onClick={() => eliminar(r)}
                         disabled={r.en_uso > 0}
                         title={r.en_uso > 0 ? "Hay usuarios con este rol" : ""}>
@@ -831,7 +841,7 @@ function Robot() {
       </div>
       <table className="tabla">
         <thead>
-          <tr><th>#</th><th>Inicio</th><th>Estado</th><th>Nuevas</th><th>Errores</th><th>Detalle</th></tr>
+          <tr><th>#</th><th>Inicio</th><th>Estado</th><th>Facturas</th><th>Notas crédito</th><th>Errores</th><th>Detalle</th></tr>
         </thead>
         <tbody>
           {ejec.map((e) => (
@@ -840,6 +850,7 @@ function Robot() {
               <td>{formatoFecha(e.inicio)}</td>
               <td>{e.estado}</td>
               <td>{e.facturas_nuevas}</td>
+              <td>{e.notas_credito_nuevas}</td>
               <td>{e.errores}</td>
               <td className="detalle-corto">{e.detalle || "—"}</td>
             </tr>

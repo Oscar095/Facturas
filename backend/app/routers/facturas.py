@@ -1,5 +1,5 @@
 import mimetypes
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
@@ -33,6 +33,9 @@ def listar(
     estado: str | None = None,
     area_id: int | None = None,
     proveedor: str | None = Query(None, description="texto en NIT o razón social"),
+    tipo_documento: str | None = Query(None, description="FACTURA | EQUIVALENTE"),
+    fecha_desde: date | None = Query(None, description="emisión desde (YYYY-MM-DD)"),
+    fecha_hasta: date | None = Query(None, description="emisión hasta (YYYY-MM-DD, inclusive)"),
     solo_mias: bool = False,
     pagina: int = 1,
     por_pagina: int = Query(25, le=200),
@@ -47,6 +50,16 @@ def listar(
         q = q.where(Factura.estado_proceso == estado)
     if area_id:
         q = q.where(Factura.area_id == area_id)
+    if tipo_documento:
+        q = q.where(Factura.tipo_documento == tipo_documento)
+    # El rango filtra por fecha_emision: se guarda tal cual la entrega el portal
+    # (hora local de Colombia), así que se compara directo, sin ajuste de huso
+    # horario — a diferencia de fecha_recepcion (UTC), que sí lo necesitaría.
+    if fecha_desde:
+        q = q.where(Factura.fecha_emision >= fecha_desde)
+    if fecha_hasta:
+        # < día siguiente para que "hasta" incluya el día completo con cualquier hora
+        q = q.where(Factura.fecha_emision < fecha_hasta + timedelta(days=1))
     if solo_mias:
         q = q.where(Factura.responsable_id == usuario.id)
     if proveedor:
@@ -171,16 +184,12 @@ def procesar(factura_id: int, db: Session = Depends(get_db),
     return _responder_detalle(db, factura)
 
 
-# Documentos que se sellan al aprobar (OTRO queda por fuera a propósito)
-TIPOS_FIRMABLES = ("FV", "OCN", "OCS", "CRN")
-
-
 @router.post("/{factura_id}/aprobar", response_model=FacturaDetalle)
 def aprobar(factura_id: int, datos: AprobarIn, db: Session = Depends(get_db),
             usuario: Usuario = Depends(usuario_actual)):
-    """Aprueba una factura procesada estampando la firma del usuario en todos
-    los documentos PDF adjuntos (FV/OCN/OCS/CRN), en TODAS las páginas de cada
-    documento, abajo a la derecha.
+    """Aprueba una factura procesada estampando la firma del usuario en TODOS
+    los documentos PDF adjuntos, sin importar su tipo, en todas las páginas de
+    cada documento, abajo a la derecha.
 
     La firma debe pertenecer al usuario que aprueba (se re-verifica aquí: nadie
     usa firmas ajenas). El sellado se sube como blob nuevo (`*_firmado.pdf`);
@@ -210,8 +219,6 @@ def aprobar(factura_id: int, datos: AprobarIn, db: Session = Depends(get_db),
     firmados: list[str] = []
     omitidos: list[str] = []
     for doc in documentos:
-        if doc.tipo not in TIPOS_FIRMABLES:
-            continue
         if not doc.blob_path.lower().endswith(".pdf"):
             omitidos.append(f"{doc.tipo} (no es PDF)")
             continue

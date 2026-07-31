@@ -1,18 +1,18 @@
 """Sincronización idempotente: portal Siesa -> Blob + SQL.
 
-Flujo de una corrida:
+Flujo de una corrida (todo dentro de la misma sesión de navegador):
   1. Registrar una fila en `ejecuciones`.
-  2. Login al portal y listar documentos del rango (por defecto, últimos N días).
-  3. Por cada documento cuyo CUFE no exista aún en la BD:
-       - upsert del proveedor,
-       - descargar el PDF y subirlo al Blob,
-       - crear la factura (estado 'nueva') y su documento FV,
-       - asignar área/responsable con las reglas,
-       - reevaluar completitud y registrar el evento.
-  4. Cerrar la ejecución con contadores.
+  2. Login al portal y listar 3 tipos de documento del rango:
+       - Facturas (tipo_doc=1) y Documentos Equivalentes (tipo_doc=20): ambos
+         crean una Factura (diferenciados por `tipo_documento`) con su documento
+         FV, asignación de área por reglas y evaluación de completitud.
+       - Notas Crédito (tipo_doc=91): módulo aparte (tabla `notas_credito`),
+         solo extracción y guardado — sin área ni flujo de aprobación.
+  3. Cerrar la ejecución con contadores (facturas_nuevas, notas_credito_nuevas).
 
 Es idempotente: una segunda corrida sobre el mismo rango no duplica nada
-(se filtra por CUFE ya existente).
+(dedup por CUFE contra la tabla que corresponde). Un fallo por-documento hace
+rollback de ese documento y continúa con los demás.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..models import Documento, Ejecucion, Evento, Factura, Proveedor, ahora
+from ..models import Documento, Ejecucion, Evento, Factura, NotaCredito, Proveedor, ahora
 from ..services import reglas
 from ..services.blob_storage import get_almacen
 from ..services.pdf_texto import extraer_texto
@@ -44,10 +44,11 @@ def _upsert_proveedor(db: Session, nit: str, razon_social: str) -> Proveedor:
     return prov
 
 
-def _ruta_blob(nit: str, folio: str, fecha: datetime | None, ext: str = "pdf") -> str:
+def _ruta_blob(nit: str, folio: str, fecha: datetime | None, ext: str = "pdf",
+              carpeta: str = "facturas") -> str:
     f = fecha or datetime.utcnow()
     folio_limpio = "".join(c for c in folio if c.isalnum() or c in "-_") or "sin_folio"
-    return f"facturas/{f.year:04d}/{f.month:02d}/{nit}_{folio_limpio}.{ext}"
+    return f"{carpeta}/{f.year:04d}/{f.month:02d}/{nit}_{folio_limpio}.{ext}"
 
 
 def _existe_cufe(db: Session, cufe: str) -> bool:
@@ -58,11 +59,23 @@ def _existe_cufe(db: Session, cufe: str) -> bool:
     ).first() is not None
 
 
-def _crear_factura(db: Session, doc: DocumentoPortal, siesa: SiesaClient, almacen) -> Factura:
+def _existe_cufe_nc(db: Session, cufe: str) -> bool:
+    if not cufe:
+        return False
+    return db.execute(
+        select(NotaCredito.id).where(NotaCredito.cufe == cufe)
+    ).first() is not None
+
+
+def _crear_factura(db: Session, doc: DocumentoPortal, siesa: SiesaClient, almacen,
+                   tipo_documento: str = "FACTURA") -> Factura:
     prov = _upsert_proveedor(db, doc.nit_emisor, doc.emisor)
 
-    # Descargar y subir el PDF (documento FV)
-    pdf = siesa.descargar_pdf(doc.cufe, doc.fecha)
+    # Descargar y subir el PDF (documento FV; un Documento Equivalente lo reemplaza
+    # funcionalmente, así que sigue contando como FV para completitud/aprobación).
+    # La grilla de descarga debe fijarse al MISMO tipo del documento o el CUFE no aparece.
+    tipo_doc_portal = "20" if tipo_documento == "EQUIVALENTE" else "1"
+    pdf = siesa.descargar_pdf(doc.cufe, doc.fecha, tipo_doc=tipo_doc_portal)
     ruta = _ruta_blob(doc.nit_emisor, doc.folio, doc.fecha)
     almacen.subir(ruta, pdf, content_type="application/pdf")
 
@@ -77,6 +90,7 @@ def _crear_factura(db: Session, doc: DocumentoPortal, siesa: SiesaClient, almace
         estado_portal=doc.estado_adquiriente,
         estado_proceso="nueva",
         blob_pdf=ruta,
+        tipo_documento=tipo_documento,
         # texto de la factura para evaluar patrones de ítem (reglas de área)
         texto_pdf=extraer_texto(pdf),
     )
@@ -100,6 +114,31 @@ def _crear_factura(db: Session, doc: DocumentoPortal, siesa: SiesaClient, almace
     return factura
 
 
+def _crear_nota_credito(db: Session, doc: DocumentoPortal, siesa: SiesaClient, almacen) -> NotaCredito:
+    """Notas crédito no pasan por el flujo de aprobación: se extraen y se guardan
+    para consulta, sin área/responsable/documentos/eventos."""
+    prov = _upsert_proveedor(db, doc.nit_emisor, doc.emisor)
+
+    pdf = siesa.descargar_pdf(doc.cufe, doc.fecha, tipo_doc="91")
+    ruta = _ruta_blob(doc.nit_emisor, doc.folio, doc.fecha, carpeta="notas_credito")
+    almacen.subir(ruta, pdf, content_type="application/pdf")
+
+    nota = NotaCredito(
+        cufe=doc.cufe,
+        prefijo="",
+        numero=doc.folio,
+        proveedor_id=prov.id,
+        fecha_emision=doc.fecha,
+        fecha_recepcion=ahora(),
+        valor_total=doc.valor,
+        estado_portal=doc.estado_adquiriente,
+        blob_pdf=ruta,
+    )
+    db.add(nota)
+    db.flush()
+    return nota
+
+
 def sincronizar(db: Session, dias: int = 3,
                 fecha_desde: str | None = None, fecha_hasta: str | None = None,
                 limite: int | None = None) -> dict:
@@ -118,33 +157,77 @@ def sincronizar(db: Session, dias: int = 3,
 
     almacen = get_almacen()
     nuevas = 0
+    notas_credito_nuevas = 0
     errores = 0
     detalles: list[str] = []
     sin_area: list[str] = []
 
+    def _bajo_limite(contador: int) -> bool:
+        return limite is None or contador < limite
+
     try:
         with SiesaClient(settings.url_facturas, settings.username_facturas,
                          settings.password_facturas) as siesa:
-            docs = siesa.listar_documentos(desde, hasta)
-            log.info("Portal devolvió %d documentos (%s..%s)", len(docs), desde, hasta)
-
+            # 1) Facturas
+            docs = siesa.listar_documentos(desde, hasta, tipo_doc="1")
+            log.info("Portal devolvió %d facturas (%s..%s)", len(docs), desde, hasta)
             for doc in docs:
-                if limite is not None and nuevas >= limite:
+                if not _bajo_limite(nuevas):
                     log.info("Alcanzado el límite de %d facturas nuevas", limite)
                     break
                 if _existe_cufe(db, doc.cufe):
                     continue
                 try:
-                    f = _crear_factura(db, doc, siesa, almacen)
+                    f = _crear_factura(db, doc, siesa, almacen, tipo_documento="FACTURA")
                     db.commit()
                     nuevas += 1
                     if f.area_id is None:
                         sin_area.append(doc.folio)
-                except Exception as e:  # noqa: BLE001 — no abortar toda la corrida por una factura
+                except Exception as e:  # noqa: BLE001 — no abortar toda la corrida por un documento
                     db.rollback()
                     errores += 1
-                    detalles.append(f"{doc.folio}: {e}")
-                    log.exception("Error procesando %s", doc.folio)
+                    detalles.append(f"[Factura] {doc.folio}: {e}")
+                    log.exception("Error procesando factura %s", doc.folio)
+
+            # 2) Documentos Equivalentes — fusionados en la misma tabla/flujo que Factura
+            docs_eq = siesa.listar_documentos(desde, hasta, tipo_doc="20")
+            log.info("Portal devolvió %d documentos equivalentes (%s..%s)", len(docs_eq), desde, hasta)
+            for doc in docs_eq:
+                if not _bajo_limite(nuevas):
+                    log.info("Alcanzado el límite de %d facturas nuevas (incl. equivalentes)", limite)
+                    break
+                if _existe_cufe(db, doc.cufe):
+                    continue
+                try:
+                    f = _crear_factura(db, doc, siesa, almacen, tipo_documento="EQUIVALENTE")
+                    db.commit()
+                    nuevas += 1
+                    if f.area_id is None:
+                        sin_area.append(doc.folio)
+                except Exception as e:  # noqa: BLE001
+                    db.rollback()
+                    errores += 1
+                    detalles.append(f"[Equivalente] {doc.folio}: {e}")
+                    log.exception("Error procesando documento equivalente %s", doc.folio)
+
+            # 3) Notas Crédito — módulo separado, sin área/completitud/aprobación
+            docs_nc = siesa.listar_documentos(desde, hasta, tipo_doc="91")
+            log.info("Portal devolvió %d notas crédito (%s..%s)", len(docs_nc), desde, hasta)
+            for doc in docs_nc:
+                if not _bajo_limite(notas_credito_nuevas):
+                    log.info("Alcanzado el límite de %d notas crédito nuevas", limite)
+                    break
+                if _existe_cufe_nc(db, doc.cufe):
+                    continue
+                try:
+                    _crear_nota_credito(db, doc, siesa, almacen)
+                    db.commit()
+                    notas_credito_nuevas += 1
+                except Exception as e:  # noqa: BLE001
+                    db.rollback()
+                    errores += 1
+                    detalles.append(f"[Nota Crédito] {doc.folio}: {e}")
+                    log.exception("Error procesando nota crédito %s", doc.folio)
 
         ejec.estado = "ok" if errores == 0 else "error"
     except Exception as e:  # noqa: BLE001
@@ -154,6 +237,7 @@ def sincronizar(db: Session, dias: int = 3,
     finally:
         ejec.fin = ahora()
         ejec.facturas_nuevas = nuevas
+        ejec.notas_credito_nuevas = notas_credito_nuevas
         ejec.errores = errores
         ejec.detalle = "\n".join(detalles)[:4000] if detalles else None
         db.commit()
@@ -163,6 +247,7 @@ def sincronizar(db: Session, dias: int = 3,
         "estado": ejec.estado,
         "rango": {"desde": desde, "hasta": hasta},
         "facturas_nuevas": nuevas,
+        "notas_credito_nuevas": notas_credito_nuevas,
         "errores": errores,
         "sin_area_asignada": sin_area,
         "detalle": detalles,

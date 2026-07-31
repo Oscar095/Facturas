@@ -2,7 +2,10 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../auth.jsx";
-import { badgeEstado, formatoFecha, formatoPesos, tienePermiso, ESTADOS } from "../util";
+import {
+  badgeEstado, badgeTipoDocumento, formatoFecha, formatoPesos, tienePermiso,
+  ESTADOS, TIPOS_FACTURA,
+} from "../util";
 
 export default function Facturas() {
   const { usuario } = useAuth();
@@ -13,6 +16,9 @@ export default function Facturas() {
     estado: "",
     area_id: "",
     proveedor: "",
+    tipo_documento: "",
+    fecha_desde: "",
+    fecha_hasta: "",
     solo_mias: false,
     pagina: 1,
   });
@@ -28,6 +34,9 @@ export default function Facturas() {
     if (filtros.estado) p.set("estado", filtros.estado);
     if (filtros.area_id) p.set("area_id", filtros.area_id);
     if (filtros.proveedor) p.set("proveedor", filtros.proveedor);
+    if (filtros.tipo_documento) p.set("tipo_documento", filtros.tipo_documento);
+    if (filtros.fecha_desde) p.set("fecha_desde", filtros.fecha_desde);
+    if (filtros.fecha_hasta) p.set("fecha_hasta", filtros.fecha_hasta);
     if (filtros.solo_mias) p.set("solo_mias", "true");
     p.set("pagina", filtros.pagina);
     api
@@ -62,6 +71,33 @@ export default function Facturas() {
             </option>
           ))}
         </select>
+        <select
+          value={filtros.tipo_documento}
+          onChange={(e) => set("tipo_documento", e.target.value)}
+        >
+          <option value="">Todos los tipos</option>
+          {Object.entries(TIPOS_FACTURA).map(([k, v]) => (
+            <option key={k} value={k}>
+              {v.texto}
+            </option>
+          ))}
+        </select>
+        <label className="filtro-fecha">
+          Emisión desde
+          <input
+            type="date"
+            value={filtros.fecha_desde}
+            onChange={(e) => set("fecha_desde", e.target.value)}
+          />
+        </label>
+        <label className="filtro-fecha">
+          hasta
+          <input
+            type="date"
+            value={filtros.fecha_hasta}
+            onChange={(e) => set("fecha_hasta", e.target.value)}
+          />
+        </label>
         {tienePermiso(usuario, "ver_todas_areas") && (
           <select value={filtros.area_id} onChange={(e) => set("area_id", e.target.value)}>
             <option value="">Todas las áreas</option>
@@ -87,6 +123,7 @@ export default function Facturas() {
           <thead>
             <tr>
               <th>Folio</th>
+              <th>Tipo</th>
               <th>Proveedor</th>
               <th className="der">Valor</th>
               <th>Emisión</th>
@@ -98,22 +135,26 @@ export default function Facturas() {
           <tbody>
             {cargando ? (
               <tr>
-                <td colSpan="7" className="vacio">
+                <td colSpan="8" className="vacio">
                   Cargando…
                 </td>
               </tr>
             ) : data.items.length === 0 ? (
               <tr>
-                <td colSpan="7" className="vacio">
+                <td colSpan="8" className="vacio">
                   No hay facturas con estos filtros.
                 </td>
               </tr>
             ) : (
               data.items.map((f, i) => {
                 const b = badgeEstado(f.estado_proceso);
+                const t = badgeTipoDocumento(f.tipo_documento);
                 return (
                   <tr key={f.id} style={{ "--i": i }} onClick={() => navigate(`/facturas/${f.id}`)}>
                     <td className="mono">{f.numero}</td>
+                    <td>
+                      <span className={`badge ${t.clase}`}>{t.texto}</span>
+                    </td>
                     <td>
                       <div className="prov">{f.proveedor.razon_social}</div>
                       <div className="prov-nit">{f.proveedor.nit}</div>

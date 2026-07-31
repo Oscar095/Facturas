@@ -12,6 +12,15 @@ export function badgeEstado(estado) {
   return ESTADOS[estado] || { texto: estado, clase: "" };
 }
 
+export const TIPOS_FACTURA = {
+  FACTURA: { texto: "Factura", clase: "t-factura" },
+  EQUIVALENTE: { texto: "Equivalente", clase: "t-equivalente" },
+};
+
+export function badgeTipoDocumento(tipo) {
+  return TIPOS_FACTURA[tipo] || { texto: tipo, clase: "" };
+}
+
 const pesos = new Intl.NumberFormat("es-CO", {
   style: "currency",
   currency: "COP",

@@ -1,8 +1,11 @@
 """Gestión de roles y sus permisos (solo quien tiene permiso de administrar).
 
-Los roles de sistema (admin, contabilidad, area) son de solo lectura: editarlos
-podría cambiar el comportamiento histórico o dejar al administrador sin acceso.
-Un rol solo se puede eliminar si ningún usuario lo tiene asignado.
+Los roles de sistema (admin, contabilidad, area) pueden editar sus permisos (el
+nombre nunca es editable, ni siquiera para roles no-sistema — no está en
+`RolActualizar`), pero no se pueden eliminar. Único candado adicional: al rol
+`admin` no se le puede quitar el permiso `administrar`, para no dejar el sistema
+sin nadie que pueda entrar a Admin → Roles a corregirlo.
+Un rol (de cualquier tipo) solo se puede eliminar si ningún usuario lo tiene asignado.
 """
 import re
 
@@ -70,9 +73,11 @@ def actualizar(rol_id: int, datos: RolActualizar, db: Session = Depends(get_db),
     rol = db.get(Rol, rol_id)
     if rol is None:
         raise HTTPException(404, "Rol no encontrado")
-    if rol.es_sistema:
-        raise HTTPException(400, "Los roles de sistema no se pueden modificar")
     cambios = datos.model_dump(exclude_unset=True)
+    if rol.nombre == "admin" and cambios.get("administrar") is False:
+        raise HTTPException(
+            400, "No se puede quitar el permiso 'administrar' al rol admin: "
+                 "dejaría el sistema sin nadie que pueda administrar roles")
     if "descripcion" in cambios:
         cambios["descripcion"] = (cambios["descripcion"] or "").strip() or None
     for campo, valor in cambios.items():

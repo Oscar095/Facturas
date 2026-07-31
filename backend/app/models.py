@@ -136,6 +136,9 @@ class Factura(Base):
     blob_xml: Mapped[str | None] = mapped_column(String(500), nullable=True)
     # Texto extraído del PDF (pypdf) — base para los patrones de ítem de reglas_area
     texto_pdf: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # FACTURA | EQUIVALENTE — un Documento Equivalente reemplaza funcionalmente a la
+    # FV (misma ingesta, área, completitud y aprobación); solo se diferencian aquí.
+    tipo_documento: Mapped[str] = mapped_column(String(20), default="FACTURA")
     creado_en: Mapped[datetime] = mapped_column(DateTime, default=ahora)
     actualizado_en: Mapped[datetime] = mapped_column(DateTime, default=ahora, onupdate=ahora)
 
@@ -205,5 +208,32 @@ class Ejecucion(Base):
     fin: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     estado: Mapped[str] = mapped_column(String(20), default="en_curso")  # en_curso | ok | error
     facturas_nuevas: Mapped[int] = mapped_column(default=0)
+    notas_credito_nuevas: Mapped[int] = mapped_column(default=0)
     errores: Mapped[int] = mapped_column(default=0)
     detalle: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class NotaCredito(Base):
+    """Nota crédito del portal Siesa — módulo aparte de Factura, de solo lectura.
+
+    Sin área/responsable/estado_proceso/documentos/eventos: a diferencia de una
+    Factura o un Documento Equivalente, no pasa por el flujo de aprobación. Solo
+    se extrae, se guarda y se consulta/descarga.
+    """
+
+    __tablename__ = "notas_credito"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    cufe: Mapped[str | None] = mapped_column(String(120), unique=True, nullable=True, index=True)
+    prefijo: Mapped[str] = mapped_column(String(20), default="")
+    numero: Mapped[str] = mapped_column(String(40), index=True)
+    proveedor_id: Mapped[int] = mapped_column(ForeignKey("proveedores.id"))
+    fecha_emision: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    fecha_recepcion: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    valor_total: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    iva: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    estado_portal: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    blob_pdf: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    creado_en: Mapped[datetime] = mapped_column(DateTime, default=ahora)
+
+    proveedor: Mapped[Proveedor] = relationship()

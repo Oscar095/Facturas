@@ -1,7 +1,8 @@
 """Prueba del firmado al aprobar, sobre una factura SINTÉTICA:
-FV (PDF 2 páginas) se firma, CRN (.txt) se omite, OTRO (PDF) no se toca.
-Verifica sello en la ÚLTIMA página (texto + imagen), rutas nuevas y eventos.
-Crea su propia firma de prueba y limpia todo al final."""
+se firma TODO documento PDF sin importar su tipo (FV y también OTRO);
+CRN (.txt) se omite solo por no ser PDF. Verifica sello en TODAS las
+páginas (texto + imagen), rutas nuevas y eventos. Crea su propia firma
+de prueba y limpia todo al final."""
 import sys
 sys.path.insert(0, "backend")
 from io import BytesIO
@@ -79,9 +80,10 @@ try:
     fx = db2.get(Factura, fid)
     assert docs["FV"].blob_path == "prueba_firma/fv_firmado.pdf", docs["FV"].blob_path
     assert fx.blob_pdf == "prueba_firma/fv_firmado.pdf", "factura.blob_pdf no se actualizó"
-    assert docs["CRN"].blob_path == "prueba_firma/crn.txt"
-    assert docs["OTRO"].blob_path == "prueba_firma/otro.pdf"
-    print("3) FV apunta al PDF firmado (y factura.blob_pdf también); CRN/OTRO intactos: OK")
+    assert docs["CRN"].blob_path == "prueba_firma/crn.txt", "CRN (.txt) no debía firmarse"
+    assert docs["OTRO"].blob_path == "prueba_firma/otro_firmado.pdf", \
+        f"OTRO es PDF y ahora debe firmarse también: {docs['OTRO'].blob_path}"
+    print("3) FV y OTRO apuntan a PDF firmado (cualquier tipo se firma); CRN (.txt) intacto: OK")
 
     sellado = almacen.descargar("prueba_firma/fv_firmado.pdf")
     lector = PdfReader(BytesIO(sellado))
@@ -100,8 +102,8 @@ try:
 
     ev = [e.detalle for e in db2.execute(select(Evento).where(
         Evento.factura_id == fid, Evento.accion == "aprobada")).scalars()][0]
-    assert "FV" in ev and "CRN (no es PDF)" in ev
-    print(f"6) evento auditado: {ev!r}: OK")
+    assert "FV" in ev and "OTRO" in ev and "CRN (no es PDF)" in ev
+    print(f"6) evento auditado (FV y OTRO firmados, CRN omitido por no-PDF): {ev!r}: OK")
     db2.close()
 finally:
     db3 = SessionLocal()
@@ -111,7 +113,8 @@ finally:
     fx = db3.get(Factura, fid)
     db3.delete(fx); db3.commit(); db3.close()
     for rta in ("prueba_firma/fv.pdf", "prueba_firma/fv_firmado.pdf",
-                "prueba_firma/crn.txt", "prueba_firma/otro.pdf"):
+                "prueba_firma/crn.txt", "prueba_firma/otro.pdf",
+                "prueba_firma/otro_firmado.pdf"):
         almacen.eliminar(rta)
     if firma_id:
         c.delete(f"/api/firmas/{firma_id}")

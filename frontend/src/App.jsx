@@ -6,6 +6,7 @@ import Login from "./pages/Login.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Facturas from "./pages/Facturas.jsx";
 import FacturaDetalle from "./pages/FacturaDetalle.jsx";
+import NotasCredito from "./pages/NotasCredito.jsx";
 import MisFirmas from "./pages/MisFirmas.jsx";
 import Admin from "./pages/Admin.jsx";
 
@@ -34,6 +35,14 @@ export default function App() {
         <Route index element={<Dashboard />} />
         <Route path="/facturas" element={<Facturas />} />
         <Route path="/facturas/:id" element={<FacturaDetalle />} />
+        <Route
+          path="/notas-credito"
+          element={
+            <Privada permiso="ver_todas_areas">
+              <NotasCredito />
+            </Privada>
+          }
+        />
         <Route path="/firmas" element={<MisFirmas />} />
         <Route
           path="/admin"

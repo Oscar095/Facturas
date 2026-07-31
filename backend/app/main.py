@@ -10,7 +10,9 @@ from fastapi.staticfiles import StaticFiles
 from .config import settings
 from .database import Base, SessionLocal, crear_esquema_si_falta, engine
 from .models import Rol, Usuario
-from .routers import areas, auth, documentos, facturas, firmas, jobs, panel, roles, usuarios
+from .routers import (
+    areas, auth, documentos, facturas, firmas, jobs, notas_credito, panel, roles, usuarios,
+)
 from .security import PERMISOS_LEGADO, hash_clave
 
 logging.basicConfig(level=logging.INFO)
@@ -25,7 +27,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-for r in (auth, facturas, documentos, areas, usuarios, jobs, panel, firmas, roles):
+for r in (auth, facturas, documentos, areas, usuarios, jobs, panel, firmas, roles, notas_credito):
     app.include_router(r.router)
 
 

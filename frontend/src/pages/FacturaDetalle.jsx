@@ -282,8 +282,8 @@ export default function FacturaDetalle() {
           <div className="aprobar-panel">
             <h3>Firmar y aprobar</h3>
             <p className="ayuda">
-              Tu firma se estampará en todas las páginas de cada documento PDF
-              adjunto (FV, OCN, OCS, CRN), en la esquina inferior derecha.
+              Tu firma se estampará en todas las páginas de todos los documentos
+              PDF adjuntos a la factura, en la esquina inferior derecha.
             </p>
             {firmas.length === 0 ? (
               <p className="ayuda">

@@ -63,14 +63,23 @@ try:
     if de_area:
         print(f"\n— permisos de {de_area.email} (rol area): {permisos_de(db, de_area)}")
 
-    # Intentar editar un rol de sistema -> debe fallar
+    # Quitarle 'administrar' al rol admin -> debe fallar (candado anti-lockout)
+    from app.schemas import RolActualizar
     admin_rol = db.execute(select(Rol).where(Rol.nombre == "admin")).scalar_one()
     try:
-        from app.schemas import RolActualizar
         roles_router.actualizar(admin_rol.id, RolActualizar(administrar=False), db=db, _=admin)
-        print("ERROR: debió rechazar editar un rol de sistema")
+        print("ERROR: debió rechazar quitarle 'administrar' al rol admin")
     except Exception as e:
-        print(f"— rechazo esperado al editar rol de sistema: {e}")
+        print(f"— rechazo esperado al quitar 'administrar' del rol admin: {e}")
+
+    # Editar OTRO permiso de un rol de sistema (no administrar) -> debe funcionar y revertir
+    contabilidad_rol = db.execute(select(Rol).where(Rol.nombre == "contabilidad")).scalar_one()
+    original = contabilidad_rol.editar_facturas
+    actualizado = roles_router.actualizar(
+        contabilidad_rol.id, RolActualizar(editar_facturas=not original), db=db, _=admin)
+    assert actualizado.editar_facturas == (not original), "no se aplicó el cambio"
+    roles_router.actualizar(contabilidad_rol.id, RolActualizar(editar_facturas=original), db=db, _=admin)
+    print(f"\n— editar permiso no-crítico de rol de sistema (contabilidad): OK, revertido a {original} —")
 
     # Limpieza: eliminar el rol de prueba
     r = roles_router.eliminar(creado.id, db=db, _=admin)

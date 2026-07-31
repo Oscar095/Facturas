@@ -142,6 +142,7 @@ class FacturaResumen(BaseModel):
     fecha_recepcion: datetime | None
     estado_proceso: str
     tipo_orden: str | None
+    tipo_documento: str = "FACTURA"
     area: AreaOut | None
     responsable: UsuarioOut | None
 
@@ -170,6 +171,24 @@ class PaginaFacturas(BaseModel):
     por_pagina: int
 
 
+class NotaCreditoOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    cufe: str | None
+    numero: str
+    proveedor: ProveedorOut
+    valor_total: Decimal | None
+    fecha_emision: datetime | None
+    fecha_recepcion: datetime | None
+
+
+class PaginaNotasCredito(BaseModel):
+    items: list[NotaCreditoOut]
+    total: int
+    pagina: int
+    por_pagina: int
+
+
 class EjecucionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
@@ -177,6 +196,7 @@ class EjecucionOut(BaseModel):
     fin: datetime | None
     estado: str
     facturas_nuevas: int
+    notas_credito_nuevas: int = 0
     errores: int
     detalle: str | None
 
@@ -185,5 +205,6 @@ class ResumenSync(BaseModel):
     ejecucion_id: int
     estado: str
     facturas_nuevas: int
+    notas_credito_nuevas: int = 0
     errores: int
     sin_area_asignada: list[str]
