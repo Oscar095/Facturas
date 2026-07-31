@@ -116,10 +116,17 @@ class ReglaArea(Base):
 
 class Factura(Base):
     __tablename__ = "facturas"
-    __table_args__ = (UniqueConstraint("proveedor_id", "prefijo", "numero"),)
+    __table_args__ = (
+        UniqueConstraint("proveedor_id", "prefijo", "numero"),
+        # Único solo cuando hay CUFE: las facturas de carga manual (físicas/correo)
+        # pueden venir sin CUFE, y SQL Server trata NULL=NULL como duplicado en un
+        # UNIQUE normal (mismo patrón que ReglaArea).
+        Index("ix_facturas_cufe", "cufe", unique=True,
+              mssql_where=text("cufe IS NOT NULL")),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    cufe: Mapped[str | None] = mapped_column(String(120), unique=True, nullable=True, index=True)
+    cufe: Mapped[str | None] = mapped_column(String(120), nullable=True)
     prefijo: Mapped[str] = mapped_column(String(20), default="")
     numero: Mapped[str] = mapped_column(String(40), index=True)
     proveedor_id: Mapped[int] = mapped_column(ForeignKey("proveedores.id"))
@@ -139,6 +146,8 @@ class Factura(Base):
     # FACTURA | EQUIVALENTE — un Documento Equivalente reemplaza funcionalmente a la
     # FV (misma ingesta, área, completitud y aprobación); solo se diferencian aquí.
     tipo_documento: Mapped[str] = mapped_column(String(20), default="FACTURA")
+    # portal (robot Siesa) | manual (módulo "Cargar factura": físicas o de correo)
+    origen: Mapped[str] = mapped_column(String(10), default="portal")
     creado_en: Mapped[datetime] = mapped_column(DateTime, default=ahora)
     actualizado_en: Mapped[datetime] = mapped_column(DateTime, default=ahora, onupdate=ahora)
 

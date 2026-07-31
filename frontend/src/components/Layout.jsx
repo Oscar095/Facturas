@@ -29,6 +29,11 @@ export default function Layout() {
             <NavLink to="/facturas">
               <span className="nav-icono">🧾</span> Facturas
             </NavLink>
+            {tienePermiso(usuario, "editar_facturas") && (
+              <NavLink to="/cargar-factura">
+                <span className="nav-icono">📤</span> Cargar factura
+              </NavLink>
+            )}
             {tienePermiso(usuario, "ver_todas_areas") && (
               <NavLink to="/notas-credito">
                 <span className="nav-icono">↩️</span> Notas Crédito

@@ -516,3 +516,23 @@ a:hover { text-decoration: underline; }
   .nav-titulo { display: none; }
   .barra-fila { grid-template-columns: 130px 1fr; }
 }
+
+/* ── Cargar factura (carga manual con IA) ─────────────────────────────── */
+.carga-manual { max-width: 760px; }
+.carga-manual > .ayuda { margin: 4px 0 16px; font-size: 13px; max-width: 60ch; }
+.carga-manual .panel { display: flex; flex-direction: column; gap: 14px; }
+.carga-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; }
+.carga-form label {
+  display: flex; flex-direction: column; gap: 5px;
+  font-size: 12px; font-weight: 600; color: var(--tinta-sub);
+}
+.carga-form input {
+  padding: 9px 12px; border: 1px solid var(--linea-fuerte); border-radius: var(--radio-chico);
+  background: var(--papel-alto); color: var(--tinta); font-family: var(--f-cuerpo); font-size: 14px;
+}
+.carga-form input:focus { outline: none; border-color: var(--marca); }
+.carga-form .carga-cufe { grid-column: 1 / -1; }
+.carga-form .carga-cufe input { font-family: var(--f-mono); font-size: 12px; }
+.carga-form .carga-acciones { grid-column: 1 / -1; display: flex; justify-content: flex-end; }
+.aviso.ok { background: var(--salvia-cl); color: var(--salvia); border-color: var(--salvia); }
+@media (max-width: 720px) { .carga-form { grid-template-columns: 1fr; } }

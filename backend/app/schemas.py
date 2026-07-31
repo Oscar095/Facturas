@@ -1,7 +1,7 @@
 """Esquemas Pydantic para las respuestas y peticiones de la API."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, EmailStr
@@ -143,6 +143,7 @@ class FacturaResumen(BaseModel):
     estado_proceso: str
     tipo_orden: str | None
     tipo_documento: str = "FACTURA"
+    origen: str = "portal"  # portal | manual
     area: AreaOut | None
     responsable: UsuarioOut | None
 
@@ -162,6 +163,19 @@ class FacturaActualizar(BaseModel):
 class AprobarIn(BaseModel):
     """Aprobación de factura: con qué firma del usuario se sellan los documentos."""
     firma_id: int
+
+
+class ExtraccionFactura(BaseModel):
+    """Datos que la IA leyó de un PDF cargado a mano — SIEMPRE los revisa y
+    corrige el usuario en el formulario antes de crear la factura."""
+    nit: str | None = None
+    razon_social: str | None = None
+    numero: str | None = None
+    cufe: str | None = None
+    fecha_emision: date | None = None
+    valor_total: Decimal | None = None
+    iva: Decimal | None = None
+    advertencias: list[str] = []
 
 
 class PaginaFacturas(BaseModel):

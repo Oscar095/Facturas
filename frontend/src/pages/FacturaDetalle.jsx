@@ -196,6 +196,12 @@ export default function FacturaDetalle() {
           <span className="etiqueta">Tipo de orden</span>
           <span className="valor">{factura.tipo_orden || "—"}</span>
         </div>
+        <div>
+          <span className="etiqueta">Origen</span>
+          <span className="valor">
+            {factura.origen === "manual" ? "📤 Carga manual" : "Portal Siesa"}
+          </span>
+        </div>
       </div>
 
       {error && <div className="error">{error}</div>}

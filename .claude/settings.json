@@ -59,7 +59,19 @@
       "Bash(mkdir -p \"/c/Users/oscaro/AppData/Local/Temp/claude/c--Users-oscaro-Facturas/21d85e9b-94ad-491d-9208-6bbef7187859/scratchpad/ui3\")",
       "Bash(PYTHONUTF8=1 ./.venv/Scripts/python.exe scripts/probar_ui.py \"C:\\\\Users\\\\oscaro\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-oscaro-Facturas\\\\21d85e9b-94ad-491d-9208-6bbef7187859\\\\scratchpad\\\\ui3\")",
       "Bash(nohup ../.venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000)",
-      "Bash(curl -s -o /dev/null -w \"backend status: %{http_code}\\\\n\" http://127.0.0.1:8000/)"
+      "Bash(curl -s -o /dev/null -w \"backend status: %{http_code}\\\\n\" http://127.0.0.1:8000/)",
+      "Bash(.venv/Scripts/python.exe scripts/ver_ultimo_log.py)",
+      "Bash(.venv/Scripts/python.exe scripts/diagnosticar_login.py \"C:\\\\Users\\\\oscaro\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-oscaro-Facturas\\\\21d85e9b-94ad-491d-9208-6bbef7187859\\\\scratchpad\\\\diag\")",
+      "Bash(.venv/Scripts/python.exe scripts/diagnosticar_login2.py)",
+      "Bash(sed -i 's/──/--/g' scripts/diagnosticar_login2.py)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe scripts/diagnosticar_login2.py)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe scripts/diagnosticar_login3.py)",
+      "Bash(git rev-list *)",
+      "Bash(.venv/Scripts/python.exe scripts/migrar_carga_manual.py)",
+      "PowerShell($conn = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue; if \\($conn\\) { $conn | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -Confirm:$false; \"matado PID $_\" } } else { \"no habia uvicorn en 8000\" })",
+      "Bash(curl -s http://127.0.0.1:8000/api/health)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe scripts/probar_carga_manual_api.py)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -c ' *)"
     ]
   }
 }

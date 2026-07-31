@@ -96,7 +96,8 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
 - **SQL Server + UNIQUE con NULL**: SQL Server trata múltiples `NULL` como duplicados en un
   UNIQUE constraint (a diferencia de ANSI/Postgres). Para columnas nullable únicas se usa un
   **índice único filtrado**: `Index(..., unique=True, mssql_where=text("col IS NOT NULL"))`.
-  Ver `ReglaArea` en `models.py`.
+  Ver `ReglaArea` y `Factura.cufe` en `models.py` (el de `facturas.cufe` se migró con
+  `scripts/migrar_carga_manual.py` porque las facturas manuales pueden venir sin CUFE).
 - **SPA**: `main.py` sirve `index.html` con `Cache-Control: no-cache` para evitar que el
   navegador cachee un `index.html` viejo que referencia bundles de Vite ya borrados.
 
@@ -156,6 +157,26 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
   el blob (`eliminar()` en blob_storage). No romper esto al construir el flujo de firmado:
   verificar propiedad de `firma_id` otra vez en el momento de firmar.
 
+## Carga manual de facturas (`/cargar-factura`, `routers/carga_facturas.py`)
+
+- Para el ~20% de facturas que NO llegan por Siesa (físicas o de correo). Flujo en 2 pasos,
+  **el backend no guarda nada entre uno y otro** (el PDF viaja en ambos requests):
+  `POST /api/facturas/carga/extraer` (solo lee el PDF con IA y devuelve los campos) →
+  el usuario **revisa/corrige en el formulario** → `POST /api/facturas/carga` (crea la
+  factura). La IA **nunca escribe directo en la BD** — extracción ≠ guardado, a propósito.
+- La extracción (`services/extraer_factura.py`) usa **Haiku** y manda **solo el texto** del
+  PDF (pypdf, gratis) cuando hay capa de texto; el PDF completo como documento (visión, más
+  caro) solo si viene escaneado (<150 chars de texto). Es la ÚNICA otra llamada a la API de
+  Claude además de `ia_area.py`, y solo corre cuando el usuario pulsa "Extraer datos con IA".
+  Si la IA falla, el endpoint devuelve el formulario vacío con advertencia (no 500) y el
+  usuario llena a mano — la carga manual nunca depende de la IA.
+- La factura creada entra al **mismo flujo que las del portal**: proveedor upsert, blob en
+  `facturas/AAAA/MM/`, documento FV, `texto_pdf`, reglas de área y completitud. Se marca con
+  `facturas.origen = 'manual'` (vs `'portal'`; visible en el detalle) y evento `carga_manual`.
+- Dedup: por CUFE si el usuario lo diligenció, y por (proveedor, número) → 409. El CUFE es
+  opcional: por eso `facturas.cufe` pasó a índice único filtrado (ver Convenciones).
+- Permiso: `editar_facturas` (endpoint y visibilidad del link/página).
+
 ## Listado de facturas
 
 - `GET /api/facturas` filtra por `fecha_desde`/`fecha_hasta` sobre **`fecha_emision`** (no
@@ -186,6 +207,22 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
 
 ## Estado / pendientes
 
+- **BLOQUEANTE — login Siesa roto (desde 2026-07-30)**: el portal se actualizó a
+  "Siesa E - Invoicing **Versión 3.1.0.17**" y rechaza las credenciales guardadas — el propio
+  portal responde "Usuario o contraseña incorrectos". Por eso toda corrida de sync falla con
+  `Fallo general: Timeout 45000ms exceeded ... waiting for navigation to '**/documentRecepcion/**'`
+  (el login nunca completa; afecta local Y la nube/n8n, que usan la misma clave).
+  **Pendiente del usuario**: restablecer la contraseña en el portal y actualizar
+  `PASSWORD_FACTURAS` en `.env` + App Settings del App Service. Al tener clave válida,
+  re-verificar el robot con `scripts/diagnosticar_login.py` (sin commitear, herramienta local):
+  el form nuevo usa `#username_f`/`#pass_f`, el botón de login **NO es `type=submit`**
+  (llama `$ctrl.getToken()` → POST `login/get-token`; en diagnóstico funcionó el clic por texto
+  "Iniciar Sesión") — puede requerir ajustar `_login()` en `siesa_client.py`. Además hay un
+  `#token_input` oculto + botón "VALIDAR TOKEN" (`$ctrl.validarToken()`): posible 2FA que solo
+  se puede evaluar con credenciales válidas.
+- **Scripts locales sin versionar** (herramientas de diagnóstico, misma máquina):
+  `scripts/diagnosticar_login.py` (reproduce el login con screenshots/toasts/errores HTTP) y
+  `scripts/ver_ultimo_log.py` (últimas 4 filas de `ejecuciones` con desglose de contadores).
 - **Reglas de área**: importadas 184 filas desde el Excel histórico (cruce de NIT por mayoría).
   Quedan ~34 proveedores con NIT ambiguo y ~9 sin NIT (en `reglas_area` con `proveedor_nit`
   NULL) y 17 con múltiples áreas candidatas — se completan a mano o cuando exista extracción IA.
@@ -196,7 +233,9 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
   anterior de extraer ítems estructurados (`ItemFactura`) quedó superseded por el matching
   full-text, que es gratis. La key vive en `.env` como `API_KEY_IA_CLAUDE`.
 - **Despliegue**: proyecto ya desplegado en Azure App Service (contenedor). n8n ya configurado
-  apuntando a `POST /api/jobs/sync`.
+  apuntando a `POST /api/jobs/sync`. La tanda de 3 tipos de documento + firma universal +
+  filtros ya salió a producción (commit "Segundo Deploy"); la migración de Azure SQL se corrió
+  ANTES del deploy (orden crítico: `create_all()` no altera tablas existentes).
 - **Cleanup pendiente (menor)**: `models.py` tiene una constante `ESTADOS_PROCESO` que quedó
   desactualizada (no incluye `procesada`/`aprobada`) — no se usa en ningún otro lado del
   backend (verificado por grep), es inofensiva pero conviene corregirla o borrarla si se toca

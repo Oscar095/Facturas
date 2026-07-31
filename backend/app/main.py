@@ -11,7 +11,8 @@ from .config import settings
 from .database import Base, SessionLocal, crear_esquema_si_falta, engine
 from .models import Rol, Usuario
 from .routers import (
-    areas, auth, documentos, facturas, firmas, jobs, notas_credito, panel, roles, usuarios,
+    areas, auth, carga_facturas, documentos, facturas, firmas, jobs, notas_credito,
+    panel, roles, usuarios,
 )
 from .security import PERMISOS_LEGADO, hash_clave
 
@@ -27,7 +28,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-for r in (auth, facturas, documentos, areas, usuarios, jobs, panel, firmas, roles, notas_credito):
+# carga_facturas va antes que facturas: sus rutas /api/facturas/carga* deben
+# resolverse antes que las dinámicas /api/facturas/{id} del router de facturas.
+for r in (auth, carga_facturas, facturas, documentos, areas, usuarios, jobs, panel,
+          firmas, roles, notas_credito):
     app.include_router(r.router)
 
 
