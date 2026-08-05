@@ -18,9 +18,9 @@ La ingesta trae 3 tipos de documento en la misma sesión de navegador
 (`tipo_doc=20`) van a la tabla `facturas` diferenciados por la columna
 `tipo_documento` (`FACTURA|EQUIVALENTE`) — un Equivalente reemplaza funcionalmente a la FV,
 mismo flujo de área/completitud/aprobación. Las **Notas Crédito** (`tipo_doc=91`) van a la
-tabla aparte `notas_credito` (solo consulta: sin área ni flujo de aprobación; endpoint
-`/api/notas-credito` protegido con permiso `ver_todas_areas`; blobs en
-`notas_credito/AAAA/MM/`). No se extraen Notas Débito (`92`) — no se ha pedido.
+tabla aparte `notas_credito` (**sí tienen área**, pero NO flujo de completitud/aprobación —
+ver "Notas Crédito" abajo; blobs en `notas_credito/AAAA/MM/`). No se extraen Notas Débito
+(`92`) — no se ha pedido.
 
 ## Entorno de ejecución (IMPORTANTE)
 
@@ -73,7 +73,15 @@ Esto es lo más frágil del proyecto. Ya resuelto, pero entiéndelo antes de toc
    abierto, su backdrop tapa el botón "Buscar" del siguiente documento y fallan todos.
    `_cerrar_modales()` se llama antes de cada descarga (cierre amable + red de seguridad por JS
    que oculta modales/backdrops residuales). `descargar_pdf` además **reintenta hasta 3 veces**.
-5. La sincronización es **idempotente**: dedup por CUFE (`_existe_cufe`). Reejecutar el mismo
+5. **El login de v3.1.0.17 NO navega a otra URL.** Antes `_login()` esperaba
+   `wait_for_url("**/documentRecepcion/**")`; desde la actualización del portal la pantalla de
+   recepción se renderiza **dejando la URL en `#/login`**, así que esa espera reventaba con
+   `Timeout 45000ms exceeded` aun con credenciales VÁLIDAS (se confundió con el problema de
+   clave vencida que ocurrió el mismo día). Ahora se espera a que aparezca el **botón
+   "Buscar"** de los filtros, que sí es señal confiable de sesión iniciada. Además el botón de
+   login **ya no es `type=submit`** (llama `$ctrl.getToken()`): se intenta clic por texto
+   "Iniciar Sesión", luego el submit clásico y por último Enter.
+6. La sincronización es **idempotente**: dedup por CUFE (`_existe_cufe`). Reejecutar el mismo
    rango no duplica nada. Un fallo por-documento hace `rollback` de esa factura y **continúa**
    con las demás (no aborta la corrida).
 
@@ -176,6 +184,50 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
 - Dedup: por CUFE si el usuario lo diligenció, y por (proveedor, número) → 409. El CUFE es
   opcional: por eso `facturas.cufe` pasó a índice único filtrado (ver Convenciones).
 - Permiso: `editar_facturas` (endpoint y visibilidad del link/página).
+- **Moneda extranjera (USD)**: la BD guarda `valor_total`/`iva` SIEMPRE en COP. Si la IA
+  detecta factura en USD, extrae también la **TRM impresa en la factura** y el formulario la
+  muestra para que el usuario la revise; al guardar, el backend convierte (USD × TRM,
+  redondeo a centavos), exige TRM si `moneda=USD` (400 si falta) y deja trazabilidad en
+  `facturas.moneda` / `trm` / `valor_original` (+ el evento `carga_manual` anota la
+  conversión). Con `moneda=COP` la TRM se descarta. Migración:
+  `scripts/migrar_moneda_vencimiento.py` (ya corrida en Azure SQL).
+- **`facturas.fecha_vencimiento`**: la llena la carga manual (la IA la extrae) y también la
+  ingesta del portal — ver "Fecha de vencimiento" abajo.
+
+## Fecha de vencimiento (`services/vencimiento.py`)
+
+- **El portal Siesa NO la expone** (verificado, no volver a intentarlo a ciegas): el JSON del
+  listado tiene 23 claves y ninguna es de vencimiento (solo `FORMA_PAGO`: 1=contado/2=crédito);
+  el menú de cada fila solo ofrece "Ver DIAN / Ver PDF / Ver Logs" — **no hay descarga de XML**;
+  y el catálogo público de la DIAN (`catalogo-vpfe.dian.gov.co`, tanto `searchqr` como
+  `DownloadZipFiles`) hoy **exige login**, así que tampoco sirve para sacar el `cbc:DueDate`
+  del UBL. Herramientas del spike: `scripts/explorar_vencimiento.py` y
+  `scripts/explorar_xml_portal.py`.
+- Por eso se deduce del **texto del PDF** (`texto_pdf`, pypdf — gratis), en 3 niveles
+  determinísticos + IA como último recurso (`resolver_vencimiento()`, la función que usan la
+  ingesta y el backfill):
+  1. Fecha junto a la etiqueta (venc. / "pague antes de" / límite de pago…), juntando **todas**
+     las apariciones y tomando la más tardía: el layout en columnas suele dejar la etiqueta
+     pegada a la EMISIÓN en un lado y al vencimiento en otro.
+  2. Plazo de crédito escrito ("CREDITO 45 DIAS") sumado a la emisión.
+  3. Si la etiqueta existe pero quedó lejos de su valor, la **única** fecha posterior a la
+     emisión del documento; si hay varias es ambiguo y se deja NULL (nunca adivinar).
+  4. **IA (Haiku, `services/vencimiento_ia.py`) — solo si `usar_ia`** y los 3 niveles fallaron.
+     Manda solo el texto recortado, o el PDF **recortado a la 1ª página** si viene escaneado
+     (visión cuesta por página). Queda auditado como evento `ia_vencimiento`.
+- **Gotcha 1 — la vigencia de la resolución DIAN**: toda factura la imprime (rango de ~2 años).
+  Por eso `_MAX_DIAS = 180` es deliberadamente ajustado; con una ventana amplia esa fecha se
+  cuela como vencimiento. En los datos reales ningún plazo pasa de 120 días. No subir ese límite.
+- **Gotcha 2 — la IA inventa el plazo típico**: comprobado en pruebas, ante una factura que NO
+  dice el vencimiento, Haiku responde con seguridad "emisión + 30 días". Por eso se le exige
+  citar el fragmento y `_respaldada_por_el_documento()` **verifica que la fecha exista de verdad
+  en el texto** (o que salga de un plazo escrito); sin respaldo se descarta. No quitar esa
+  verificación: sin ella entraron fechas falsas en las pruebas. En escaneadas no aplica (no hay
+  texto que confrontar) — ahí se confía en la visión.
+- Cobertura real: **87% del total** (432/498). Pruebas: `scripts/probar_vencimiento.py`
+  (22 casos con fragmentos reales, incluidos los que DEBEN dar None). Backfill idempotente:
+  `scripts/backfill_vencimiento.py [--ia] [--aplicar]` (solo toca filas NULL; sin `--ia` no
+  gasta un peso). Costo medido con `scripts/estimar_costo_ia_vencimiento.py`: **~US$1/mes**.
 
 ## Listado de facturas
 
@@ -184,16 +236,53 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
   Colombia), así que se compara directo. NO "corregir" esto a `fecha_recepcion` sin aplicar
   el desfase de Bogotá (esa columna sí está en UTC — ver gotcha del Dashboard).
 
+## Notas Crédito (`/notas-credito`, `routers/notas_credito.py`)
+
+- **Sí tienen área/responsable** (`notas_credito.area_id` / `responsable_id`), pero **no**
+  tienen `estado_proceso`, documentos, eventos ni flujo de aprobación: solo se consultan,
+  se descarga el PDF y se sabe a qué área corresponde el crédito.
+- **Asignación automática por reglas, SIN IA.** Comparte la cascada con las facturas —
+  `reglas._resolver_regla()` es el núcleo común (NIT → patrones de ítem sobre `texto_pdf`) —
+  pero se invoca vía `reglas.asignar_area_nota_credito()`, que pasa `usar_ia=False`.
+  Decisión de negocio: **no gastar créditos de Claude en notas crédito**; lo que los patrones
+  no decidan queda sin área para asignarse a mano. No ampliar esto sin que el usuario lo pida.
+- Al no haber IA tampoco hay evento que auditar, y de todas formas no se podría:
+  `eventos.factura_id` es un FK NOT NULL a `facturas.id`, así que **una nota crédito no puede
+  escribir en `eventos`** tal como está el modelo hoy.
+- **Asignación manual**: `PATCH /api/notas-credito/{id}` (permiso `editar_facturas`, el mismo
+  que para editar facturas) con `{area_id}`. La UI es un dropdown por fila en el listado
+  (no hay página de detalle de nota crédito).
+- **Alcance por rol igual que en facturas**: con `ver_todas_areas` se ven todas; sin ese
+  permiso, solo las del área del usuario (las que están sin asignar solo las ve quien ve
+  todas). Por eso la ruta `/notas-credito` y el link del menú **ya no** están detrás de
+  `ver_todas_areas` — el filtrado lo hace el backend (`_filtrar_por_rol`), no el frontend.
+- Las notas crédito **históricas quedaron sin área** (decisión: no re-descargar el histórico
+  del Blob para extraerles el texto). Se asignan a mano con el dropdown; el filtro
+  `?sin_area=true` ("Solo sin área" en la UI) sirve justamente para irlas despachando.
+
 ## Dashboard (`/`, página de inicio)
 
-- `GET /api/panel/dashboard?periodo=mes|trimestre|anio|todo` (`routers/panel.py`) alimenta
-  `frontend/src/pages/Dashboard.jsx`: KPIs del mes, compras por área (con "Sin asignar"
-  destacado) y las facturas con más tiempo sin procesar.
+- `GET /api/panel/dashboard?periodo=mes|trimestre|anio|todo&mes=AAAA-MM&meses=12`
+  (`routers/panel.py`) alimenta `frontend/src/pages/Dashboard.jsx`: KPIs del mes elegido,
+  compras por área (con "Sin asignar" destacado), la matriz **área × mes** y las facturas
+  con más tiempo sin procesar.
+- **`mes` (`AAAA-MM`) ancla todo el panel**, no solo las tarjetas: los periodos relativos
+  terminan en él (`trimestre` = ese mes y los 2 previos; `anio` = enero→ese mes), así se
+  puede analizar cualquier mes histórico. Por defecto es el mes en curso; un formato
+  inválido responde 400. `meses_disponibles` (del primer documento al mes actual, tope
+  `_MAX_MESES_SELECTOR`) alimenta el selector de la página.
+- **La matriz agrupa por mes en Python, no en SQL** (`_clave_mes`): `DATEPART`/`strftime`
+  darían el mes UTC y una factura recibida 19:00–23:59 hora Bogotá cae al día/mes siguiente
+  en UTC. Además evita depender del dialecto (Azure SQL vs SQLite local). La ventana está
+  acotada a `meses` (≤ 24), así que la consulta trae pocas filas.
 - **Gotcha de zona horaria**: las fechas se guardan en UTC-naive pero el negocio opera en
   Bogotá (UTC-5, sin DST). Los cortes de mes/año se calculan en hora local y se convierten a
-  UTC (`_DESFASE_BOGOTA = timedelta(hours=5)`) antes de filtrar. Si se agregan más cortes de
-  fecha al panel, seguir ese mismo patrón — comparar directo en UTC sin el desfase corta el
-  mes en el momento equivocado.
+  UTC (`_DESFASE_BOGOTA = timedelta(hours=5)`, helpers `_rango_mes_utc`/`_sumar_meses`) antes
+  de filtrar. Si se agregan más cortes de fecha al panel, seguir ese mismo patrón — comparar
+  directo en UTC sin el desfase corta el mes en el momento equivocado.
+- El mapa de calor usa una **rampa secuencial de un solo tono** (azul de marca, `.celda-n1..n5`
+  en `styles.css`): claro→oscuro = más gasto, con texto blanco solo en el paso más oscuro.
+  No convertirla en multicolor ni reusarla para categorías sin orden natural.
 - El alcance por rol (`area` solo ve lo suyo) se resuelve con `tiene_permiso(db, usuario,
   "ver_todas_areas")`, igual que en `facturas.py` — no repetir el chequeo viejo
   `usuario.rol == "area"`.
@@ -207,35 +296,40 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
 
 ## Estado / pendientes
 
-- **BLOQUEANTE — login Siesa roto (desde 2026-07-30)**: el portal se actualizó a
-  "Siesa E - Invoicing **Versión 3.1.0.17**" y rechaza las credenciales guardadas — el propio
-  portal responde "Usuario o contraseña incorrectos". Por eso toda corrida de sync falla con
-  `Fallo general: Timeout 45000ms exceeded ... waiting for navigation to '**/documentRecepcion/**'`
-  (el login nunca completa; afecta local Y la nube/n8n, que usan la misma clave).
-  **Pendiente del usuario**: restablecer la contraseña en el portal y actualizar
-  `PASSWORD_FACTURAS` en `.env` + App Settings del App Service. Al tener clave válida,
-  re-verificar el robot con `scripts/diagnosticar_login.py` (sin commitear, herramienta local):
-  el form nuevo usa `#username_f`/`#pass_f`, el botón de login **NO es `type=submit`**
-  (llama `$ctrl.getToken()` → POST `login/get-token`; en diagnóstico funcionó el clic por texto
-  "Iniciar Sesión") — puede requerir ajustar `_login()` en `siesa_client.py`. Además hay un
-  `#token_input` oculto + botón "VALIDAR TOKEN" (`$ctrl.validarToken()`): posible 2FA que solo
-  se puede evaluar con credenciales válidas.
+- **Login Siesa: RESUELTO (2026-08-05)**. Fueron DOS problemas simultáneos tras la
+  actualización a "Siesa E - Invoicing v3.1.0.17": (a) la contraseña dejó de ser válida — el
+  usuario la restableció y actualizó `PASSWORD_FACTURAS` en `.env`; (b) `_login()` esperaba una
+  navegación que en v3.1 ya no ocurre (ver gotcha 5). Con ambos arreglados la ingesta real
+  corre de nuevo (verificado: 3 facturas nuevas, 0 errores). **Pendiente del usuario**:
+  actualizar también `PASSWORD_FACTURAS` en los **App Settings del App Service**, o el robot
+  de n8n seguirá fallando en la nube. El `#token_input` oculto + "VALIDAR TOKEN" del formulario
+  NO se activó con credenciales válidas (no hay 2FA que manejar).
 - **Scripts locales sin versionar** (herramientas de diagnóstico, misma máquina):
   `scripts/diagnosticar_login.py` (reproduce el login con screenshots/toasts/errores HTTP) y
   `scripts/ver_ultimo_log.py` (últimas 4 filas de `ejecuciones` con desglose de contadores).
+- **Vencimiento de facturas escaneadas**: 149 facturas no tienen `texto_pdf` (PDF sin capa de
+  texto), así que se quedan sin `fecha_vencimiento`. Resolverlas exigiría OCR o visión con IA
+  — no hacerlo sin que el usuario lo pida (gasta créditos).
 - **Reglas de área**: importadas 184 filas desde el Excel histórico (cruce de NIT por mayoría).
   Quedan ~34 proveedores con NIT ambiguo y ~9 sin NIT (en `reglas_area` con `proveedor_nit`
   NULL) y 17 con múltiples áreas candidatas — se completan a mano o cuando exista extracción IA.
 - **Texto de facturas**: `facturas.texto_pdf` se llena en la ingesta (pypdf) y fue
   backfilleado para todas las facturas históricas (`scripts/migrar_texto_pdf.py`, idempotente).
-  Es la base del matching de patrones — no borrar.
-- **IA**: implementada solo como desempate de área (`services/ia_area.py`, Haiku). El plan
-  anterior de extraer ítems estructurados (`ItemFactura`) quedó superseded por el matching
-  full-text, que es gratis. La key vive en `.env` como `API_KEY_IA_CLAUDE`.
+  Es la base del matching de patrones — no borrar. `notas_credito.texto_pdf` existe igual pero
+  **solo se llena de aquí en adelante**: las 15 notas históricas quedaron sin texto ni área
+  (no se re-descargó el histórico del Blob) y se asignan a mano.
+- **IA**: 3 usos, todos con Haiku y todos como ÚLTIMO recurso después de lo gratis —
+  desempate de área (`services/ia_area.py`), extracción en la carga manual
+  (`services/extraer_factura.py`, solo al pulsar el botón) y fecha de vencimiento
+  (`services/vencimiento_ia.py`). La key vive en `.env` como `API_KEY_IA_CLAUDE`.
+  Gasto medido del vencimiento: **~US$1/mes** a ~815 facturas/mes (Haiku 4.5 = US$1 por millón
+  de tokens de entrada, US$5 de salida; el grueso es la visión de las escaneadas). Si hace
+  falta una corrida sin gasto: `sincronizar(..., usar_ia_vencimiento=False)`.
 - **Despliegue**: proyecto ya desplegado en Azure App Service (contenedor). n8n ya configurado
   apuntando a `POST /api/jobs/sync`. La tanda de 3 tipos de documento + firma universal +
   filtros ya salió a producción (commit "Segundo Deploy"); la migración de Azure SQL se corrió
-  ANTES del deploy (orden crítico: `create_all()` no altera tablas existentes).
+  ANTES del deploy (orden crítico: `create_all()` no altera tablas existentes). Lo mismo aplica
+  a `scripts/migrar_area_notas_credito.py` (área en notas crédito) — **ya corrido en Azure SQL**.
 - **Cleanup pendiente (menor)**: `models.py` tiene una constante `ESTADOS_PROCESO` que quedó
   desactualizada (no incluye `procesada`/`aprobada`) — no se usa en ningún otro lado del
   backend (verificado por grep), es inofensiva pero conviene corregirla o borrarla si se toca

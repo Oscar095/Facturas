@@ -99,11 +99,23 @@ class SiesaClient:
             "input[placeholder*='usuario' i], input[placeholder*='correo' i]"
         ).first.fill(self.usuario)
         p.locator("input[type='password']").first.fill(self.clave)
-        try:
-            p.locator("button[type='submit']:visible").first.click(timeout=8000)
-        except Exception:
-            p.locator("input[type='password']").first.press("Enter")
-        p.wait_for_url("**/documentRecepcion/**", timeout=45000)
+        # v3.1.0.17: el botón de login ya no es type=submit (llama $ctrl.getToken());
+        # se intenta por texto, luego el submit clásico y por último Enter.
+        for enviar in (
+            lambda: p.locator("button:has-text('Iniciar Sesión'):visible").first.click(timeout=5000),
+            lambda: p.locator("button[type='submit']:visible").first.click(timeout=3000),
+            lambda: p.locator("input[type='password']").first.press("Enter"),
+        ):
+            try:
+                enviar()
+                break
+            except Exception:
+                continue
+        # v3.1 ya NO navega a **/documentRecepcion/** (la pantalla de recepción se
+        # renderiza dejando la URL en #/login), así que esperar la URL rompía el
+        # login aun con credenciales válidas. La señal confiable de sesión adentro
+        # es que aparezca el botón Buscar de los filtros de búsqueda.
+        p.locator("button:has-text('Buscar')").first.wait_for(state="visible", timeout=45000)
         p.wait_for_load_state("networkidle", timeout=45000)
         time.sleep(2)
 

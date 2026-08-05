@@ -42,6 +42,25 @@ export function formatoPesosCompacto(v) {
   return pesosCompacto.format(Number(v));
 }
 
+// ── meses del dashboard ('AAAA-MM') ──
+// Se formatean con tablas propias y no con Date: new Date("2026-07-01") se
+// interpreta como UTC y al mostrarlo en Bogotá (UTC-5) retrocede al mes anterior.
+const MESES_ES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+                  "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+
+export function etiquetaMes(clave, largo = false) {
+  if (!clave) return "—";
+  const [anio, mes] = clave.split("-").map(Number);
+  const nombre = MESES_ES[mes - 1] || clave;
+  return largo ? `${nombre} ${anio}` : `${nombre.slice(0, 3).toLowerCase()} ${String(anio).slice(2)}`;
+}
+
+export function sumarMeses(clave, n) {
+  const [anio, mes] = clave.split("-").map(Number);
+  const total = anio * 12 + (mes - 1) + n;
+  return `${String(Math.floor(total / 12)).padStart(4, "0")}-${String((total % 12) + 1).padStart(2, "0")}`;
+}
+
 // Permisos del rol (los envía /api/auth/yo). El respaldo por nombre de rol
 // cubre sesiones cargadas antes de que existieran los permisos configurables.
 const PERMISOS_LEGADO = {

@@ -162,9 +162,21 @@ export default function FacturaDetalle() {
           <span className="etiqueta">Valor</span>
           <span className="valor">{formatoPesos(factura.valor_total)}</span>
         </div>
+        {factura.moneda === "USD" && (
+          <div>
+            <span className="etiqueta">Moneda original</span>
+            <span className="valor">
+              USD {factura.valor_original ?? "—"} · TRM {factura.trm ?? "—"}
+            </span>
+          </div>
+        )}
         <div>
           <span className="etiqueta">Emisión</span>
           <span className="valor">{formatoFecha(factura.fecha_emision)}</span>
+        </div>
+        <div>
+          <span className="etiqueta">Vencimiento</span>
+          <span className="valor">{formatoFecha(factura.fecha_vencimiento)}</span>
         </div>
         <div>
           <span className="etiqueta">Recepción</span>

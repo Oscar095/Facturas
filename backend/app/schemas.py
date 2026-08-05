@@ -137,13 +137,18 @@ class FacturaResumen(BaseModel):
     cufe: str | None
     numero: str
     proveedor: ProveedorOut
-    valor_total: Decimal | None
+    valor_total: Decimal | None  # siempre en COP (convertido con TRM si moneda=USD)
+    iva: Decimal | None = None   # también en COP
     fecha_emision: datetime | None
     fecha_recepcion: datetime | None
+    fecha_vencimiento: datetime | None = None
     estado_proceso: str
     tipo_orden: str | None
     tipo_documento: str = "FACTURA"
     origen: str = "portal"  # portal | manual
+    moneda: str = "COP"
+    trm: Decimal | None = None
+    valor_original: Decimal | None = None  # valor en la moneda original (USD)
     area: AreaOut | None
     responsable: UsuarioOut | None
 
@@ -173,8 +178,13 @@ class ExtraccionFactura(BaseModel):
     numero: str | None = None
     cufe: str | None = None
     fecha_emision: date | None = None
+    fecha_vencimiento: date | None = None
+    # valor_total/iva en la MONEDA DE LA FACTURA; si moneda=USD el backend los
+    # convierte a COP con la TRM al guardar (el usuario revisa la TRM antes).
     valor_total: Decimal | None = None
     iva: Decimal | None = None
+    moneda: str = "COP"
+    trm: Decimal | None = None
     advertencias: list[str] = []
 
 
@@ -194,6 +204,14 @@ class NotaCreditoOut(BaseModel):
     valor_total: Decimal | None
     fecha_emision: datetime | None
     fecha_recepcion: datetime | None
+    area: AreaOut | None = None
+    responsable: UsuarioOut | None = None
+
+
+class NotaCreditoActualizar(BaseModel):
+    """Asignación manual de área/responsable de una nota crédito."""
+    area_id: int | None = None
+    responsable_id: int | None = None
 
 
 class PaginaNotasCredito(BaseModel):

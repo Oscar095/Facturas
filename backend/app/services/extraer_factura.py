@@ -23,7 +23,8 @@ MODELO = "claude-haiku-4-5-20251001"  # el más económico; extraer campos no re
 _MAX_TEXTO = 6000  # el encabezado de una factura cabe de sobra; controla el costo
 _MIN_TEXTO_UTIL = 150  # menos que esto = PDF escaneado sin capa de texto
 
-CAMPOS = ("nit", "razon_social", "numero", "cufe", "fecha_emision", "valor_total", "iva")
+CAMPOS = ("nit", "razon_social", "numero", "cufe", "fecha_emision", "fecha_vencimiento",
+          "valor_total", "iva", "moneda", "trm")
 
 _INSTRUCCION = """Extrae los datos de esta factura electrónica colombiana.
 Responde ÚNICAMENTE un JSON válido con exactamente estas claves (usa null si un dato no aparece):
@@ -32,8 +33,12 @@ Responde ÚNICAMENTE un JSON válido con exactamente estas claves (usa null si u
  "numero": "<número/folio completo de la factura, con su prefijo, ej: FVE12345>",
  "cufe": "<CUFE completo (hash largo hexadecimal) o null si no aparece>",
  "fecha_emision": "<fecha de emisión en formato YYYY-MM-DD>",
- "valor_total": <valor total a pagar, número sin separadores de miles>,
- "iva": <valor del IVA, número, o null>}"""
+ "fecha_vencimiento": "<fecha de vencimiento/pago en formato YYYY-MM-DD, o null>",
+ "valor_total": <valor total a pagar EN LA MONEDA DE LA FACTURA, número sin separadores de miles>,
+ "iva": <valor del IVA en la moneda de la factura, número, o null>,
+ "moneda": "<'COP' si la factura está en pesos colombianos; 'USD' si está en dólares (US$, USD, dólares)>",
+ "trm": <si la moneda es USD, la TRM / tasa de cambio impresa en la factura (pesos por dólar), número, o null si no aparece; null si la moneda es COP>}
+Ojo con los montos: usa punto como separador decimal y NO confundas los separadores de miles colombianos (1.190.000,50 = 1190000.50)."""
 
 
 def disponible() -> bool:
@@ -93,4 +98,5 @@ def extraer_datos(pdf: bytes, texto: str | None) -> dict:
         # solo dígitos: quitar puntos, espacios y el DV si vino como "900123456-7"
         nit = str(limpio["nit"]).split("-")[0]
         limpio["nit"] = "".join(c for c in nit if c.isdigit()) or None
+    limpio["moneda"] = (str(limpio.get("moneda") or "COP")).strip().upper() or "COP"
     return limpio

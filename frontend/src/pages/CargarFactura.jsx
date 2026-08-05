@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api";
+import { formatoPesos } from "../util";
 
 const CAMPOS_VACIOS = {
   nit: "",
@@ -8,8 +9,11 @@ const CAMPOS_VACIOS = {
   numero: "",
   cufe: "",
   fecha_emision: "",
+  fecha_vencimiento: "",
   valor_total: "",
   iva: "",
+  moneda: "COP",
+  trm: "",
 };
 
 export default function CargarFactura() {
@@ -22,6 +26,8 @@ export default function CargarFactura() {
   const [extrayendo, setExtrayendo] = useState(false);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState("");
+
+  const esUSD = campos.moneda === "USD";
 
   function set(campo, valor) {
     setCampos((c) => ({ ...c, [campo]: valor }));
@@ -51,8 +57,11 @@ export default function CargarFactura() {
         numero: d.numero || "",
         cufe: d.cufe || "",
         fecha_emision: d.fecha_emision || "",
+        fecha_vencimiento: d.fecha_vencimiento || "",
         valor_total: d.valor_total ?? "",
         iva: d.iva ?? "",
+        moneda: d.moneda || "COP",
+        trm: d.trm ?? "",
       });
       setAdvertencias(d.advertencias || []);
       setExtraido(true);
@@ -162,7 +171,36 @@ export default function CargarFactura() {
             />
           </label>
           <label>
-            Valor total
+            Fecha de vencimiento
+            <input
+              type="date"
+              value={campos.fecha_vencimiento}
+              onChange={(e) => set("fecha_vencimiento", e.target.value)}
+            />
+          </label>
+          <label>
+            Moneda de la factura
+            <select value={campos.moneda} onChange={(e) => set("moneda", e.target.value)}>
+              <option value="COP">COP — Pesos colombianos</option>
+              <option value="USD">USD — Dólares</option>
+            </select>
+          </label>
+          {esUSD && (
+            <label>
+              TRM (pesos por dólar) *
+              <input
+                type="number"
+                step="0.0001"
+                min="0"
+                value={campos.trm}
+                onChange={(e) => set("trm", e.target.value)}
+                placeholder="Tasa de cambio de la factura"
+                required
+              />
+            </label>
+          )}
+          <label>
+            Valor total {esUSD ? "(en USD)" : ""}
             <input
               type="number"
               step="0.01"
@@ -172,7 +210,7 @@ export default function CargarFactura() {
             />
           </label>
           <label>
-            IVA
+            IVA {esUSD ? "(en USD)" : ""}
             <input
               type="number"
               step="0.01"
@@ -181,6 +219,18 @@ export default function CargarFactura() {
               onChange={(e) => set("iva", e.target.value)}
             />
           </label>
+          {esUSD && (
+            <div className="aviso carga-conversion">
+              💱 Se guardará en pesos:{" "}
+              <b>
+                {campos.valor_total && campos.trm
+                  ? formatoPesos(Number(campos.valor_total) * Number(campos.trm))
+                  : "— diligencia valor y TRM"}
+              </b>{" "}
+              (USD {campos.valor_total || "—"} × TRM {campos.trm || "—"}). El valor en
+              dólares queda guardado como referencia.
+            </div>
+          )}
           <label className="carga-cufe">
             CUFE (si aparece en la factura)
             <input

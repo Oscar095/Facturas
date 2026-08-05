@@ -71,7 +71,11 @@
       "PowerShell($conn = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue; if \\($conn\\) { $conn | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -Confirm:$false; \"matado PID $_\" } } else { \"no habia uvicorn en 8000\" })",
       "Bash(curl -s http://127.0.0.1:8000/api/health)",
       "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe scripts/probar_carga_manual_api.py)",
-      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -c ' *)"
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -c ' *)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe scripts/migrar_moneda_vencimiento.py)",
+      "Bash(node scripts/validate_palette.js \"#eaf5fd,#cfe9f8,#a5d8f2,#6ec2ea,#22a3e0,#0b7cb5\" --ordinal --mode light)",
+      "PowerShell($conn = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue; if \\($conn\\) { $conn | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -Confirm:$false; \"matado PID $_\" } })",
+      "Bash(node scripts/validate_palette.js \"#e1f2fb,#b6e1f6,#75c8ee,#22a5e0,#0b7cb5\" --ordinal --mode light --surface \"#ffffff\")"
     ]
   }
 }

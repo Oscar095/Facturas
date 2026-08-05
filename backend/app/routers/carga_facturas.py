@@ -68,23 +68,31 @@ async def extraer(archivo: UploadFile = File(...),
         salida.numero = str(datos["numero"])[:40]
     if datos.get("cufe"):
         salida.cufe = str(datos["cufe"])[:120]
-    if datos.get("fecha_emision"):
-        try:
-            salida.fecha_emision = date.fromisoformat(str(datos["fecha_emision"]))
-        except ValueError:
-            advertencias.append(f"Fecha de emisión ilegible: {datos['fecha_emision']}")
-    for campo in ("valor_total", "iva"):
+    for campo in ("fecha_emision", "fecha_vencimiento"):
+        if datos.get(campo):
+            try:
+                setattr(salida, campo, date.fromisoformat(str(datos[campo])))
+            except ValueError:
+                advertencias.append(f"Fecha ilegible en {campo}: {datos[campo]}")
+    for campo in ("valor_total", "iva", "trm"):
         if datos.get(campo) is not None:
             try:
                 setattr(salida, campo, Decimal(str(datos[campo])))
             except InvalidOperation:
                 advertencias.append(f"Valor ilegible en {campo}: {datos[campo]}")
+    if datos.get("moneda"):
+        salida.moneda = "USD" if str(datos["moneda"]).upper() == "USD" else "COP"
 
     if datos:
         faltaron = [c for c in ("nit", "razon_social", "numero") if not datos.get(c)]
         if faltaron:
             advertencias.append(
                 "La IA no encontró: " + ", ".join(faltaron) + " — complétalos a mano"
+            )
+        if salida.moneda == "USD" and salida.trm is None:
+            advertencias.append(
+                "Factura en USD sin TRM visible en el PDF — diligencia la tasa de "
+                "cambio para guardar los valores en pesos"
             )
     return salida
 
@@ -97,13 +105,37 @@ async def crear(
     numero: str = Form(...),
     cufe: str | None = Form(None),
     fecha_emision: date | None = Form(None),
+    fecha_vencimiento: date | None = Form(None),
     valor_total: Decimal | None = Form(None),
     iva: Decimal | None = Form(None),
+    moneda: str = Form("COP"),
+    trm: Decimal | None = Form(None),
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(requiere_permiso("editar_facturas")),
 ):
-    """Crea la factura manual con los datos ya revisados por el usuario."""
+    """Crea la factura manual con los datos ya revisados por el usuario.
+
+    Si moneda=USD, valor_total/iva llegan en dólares y aquí se convierten a COP
+    con la TRM (obligatoria en ese caso): la BD guarda SIEMPRE pesos; el valor
+    en dólares queda en valor_original y la tasa usada en trm.
+    """
     pdf = await _leer_pdf(archivo)
+
+    moneda = (moneda or "COP").strip().upper()
+    if moneda not in ("COP", "USD"):
+        raise HTTPException(400, "Moneda no soportada (solo COP o USD)")
+    valor_original = None
+    if moneda == "USD":
+        if not trm or trm <= 0:
+            raise HTTPException(400, "Para facturas en USD la TRM es obligatoria")
+        valor_original = valor_total
+        centavos = Decimal("0.01")
+        if valor_total is not None:
+            valor_total = (valor_total * trm).quantize(centavos)
+        if iva is not None:
+            iva = (iva * trm).quantize(centavos)
+    else:
+        trm = None
 
     nit = "".join(c for c in nit.split("-")[0] if c.isdigit())
     numero = numero.strip()
@@ -142,8 +174,13 @@ async def crear(
         proveedor_id=prov.id,
         fecha_emision=fecha_dt,
         fecha_recepcion=ahora(),
+        fecha_vencimiento=(datetime.combine(fecha_vencimiento, time())
+                           if fecha_vencimiento else None),
         valor_total=valor_total,
         iva=iva,
+        moneda=moneda,
+        trm=trm,
+        valor_original=valor_original,
         estado_proceso="nueva",
         blob_pdf=ruta,
         tipo_documento="FACTURA",
@@ -160,8 +197,11 @@ async def crear(
         nombre_archivo=f"{nit}_{folio_limpio}.pdf",
         subido_por_id=usuario.id,
     ))
+    detalle_evento = f"Cargada manualmente por {usuario.nombre} ({archivo.filename})"
+    if moneda == "USD":
+        detalle_evento += f" — USD {valor_original} convertido a COP con TRM {trm}"
     db.add(Evento(factura_id=factura.id, usuario_id=usuario.id, accion="carga_manual",
-                  detalle=f"Cargada manualmente por {usuario.nombre} ({archivo.filename})"))
+                  detalle=detalle_evento))
 
     reglas.asignar_area(db, factura)
     db.flush()

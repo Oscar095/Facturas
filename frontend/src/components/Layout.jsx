@@ -34,11 +34,9 @@ export default function Layout() {
                 <span className="nav-icono">📤</span> Cargar factura
               </NavLink>
             )}
-            {tienePermiso(usuario, "ver_todas_areas") && (
-              <NavLink to="/notas-credito">
-                <span className="nav-icono">↩️</span> Notas Crédito
-              </NavLink>
-            )}
+            <NavLink to="/notas-credito">
+              <span className="nav-icono">↩️</span> Notas Crédito
+            </NavLink>
             <NavLink to="/firmas">
               <span className="nav-icono">✍️</span> Mis Firmas
             </NavLink>

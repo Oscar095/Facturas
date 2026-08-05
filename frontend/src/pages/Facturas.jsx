@@ -127,6 +127,7 @@ export default function Facturas() {
               <th>Proveedor</th>
               <th className="der">Valor</th>
               <th>Emisión</th>
+              <th>Vence</th>
               <th>Cargada</th>
               <th>Área</th>
               <th>Estado</th>
@@ -135,13 +136,13 @@ export default function Facturas() {
           <tbody>
             {cargando ? (
               <tr>
-                <td colSpan="8" className="vacio">
+                <td colSpan="9" className="vacio">
                   Cargando…
                 </td>
               </tr>
             ) : data.items.length === 0 ? (
               <tr>
-                <td colSpan="8" className="vacio">
+                <td colSpan="9" className="vacio">
                   No hay facturas con estos filtros.
                 </td>
               </tr>
@@ -161,6 +162,7 @@ export default function Facturas() {
                     </td>
                     <td className="der mono">{formatoPesos(f.valor_total)}</td>
                     <td>{formatoFecha(f.fecha_emision)}</td>
+                    <td>{formatoFecha(f.fecha_vencimiento)}</td>
                     <td>{formatoFecha(f.fecha_recepcion)}</td>
                     <td>{f.area?.nombre || <span className="sin">sin asignar</span>}</td>
                     <td>

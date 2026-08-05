@@ -132,8 +132,16 @@ class Factura(Base):
     proveedor_id: Mapped[int] = mapped_column(ForeignKey("proveedores.id"))
     fecha_emision: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     fecha_recepcion: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Vencimiento: hoy solo lo llena la carga manual (el JSON del portal no lo
+    # trae; la columna queda lista para cuando se extraiga también de Siesa).
+    fecha_vencimiento: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # valor_total e iva SIEMPRE en COP. Si la factura vino en otra moneda (USD),
+    # se guardan convertidos con la TRM y el valor original queda en valor_original.
     valor_total: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
     iva: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    moneda: Mapped[str] = mapped_column(String(10), default="COP")  # COP | USD
+    trm: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
+    valor_original: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
     estado_portal: Mapped[str | None] = mapped_column(String(60), nullable=True)
     estado_proceso: Mapped[str] = mapped_column(String(30), default="nueva", index=True)
     tipo_orden: Mapped[str | None] = mapped_column(String(10), nullable=True)  # OCN | OCS
@@ -223,11 +231,12 @@ class Ejecucion(Base):
 
 
 class NotaCredito(Base):
-    """Nota crédito del portal Siesa — módulo aparte de Factura, de solo lectura.
+    """Nota crédito del portal Siesa — módulo aparte de Factura.
 
-    Sin área/responsable/estado_proceso/documentos/eventos: a diferencia de una
-    Factura o un Documento Equivalente, no pasa por el flujo de aprobación. Solo
-    se extrae, se guarda y se consulta/descarga.
+    SÍ tiene área/responsable (se asignan con las mismas `reglas_area` que las
+    facturas, para saber a quién corresponde el crédito), pero NO tiene
+    estado_proceso/documentos/eventos: a diferencia de una Factura o un Documento
+    Equivalente, no pasa por el flujo de completitud/aprobación/contabilización.
     """
 
     __tablename__ = "notas_credito"
@@ -242,7 +251,13 @@ class NotaCredito(Base):
     valor_total: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
     iva: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
     estado_portal: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    area_id: Mapped[int | None] = mapped_column(ForeignKey("areas.id"), nullable=True)
+    responsable_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
     blob_pdf: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Texto extraído del PDF (pypdf) — base para los patrones de ítem de reglas_area
+    texto_pdf: Mapped[str | None] = mapped_column(Text, nullable=True)
     creado_en: Mapped[datetime] = mapped_column(DateTime, default=ahora)
 
     proveedor: Mapped[Proveedor] = relationship()
+    area: Mapped[Area | None] = relationship()
+    responsable: Mapped[Usuario | None] = relationship()

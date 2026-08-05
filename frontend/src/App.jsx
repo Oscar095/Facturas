@@ -44,14 +44,8 @@ export default function App() {
           }
         />
         <Route path="/facturas/:id" element={<FacturaDetalle />} />
-        <Route
-          path="/notas-credito"
-          element={
-            <Privada permiso="ver_todas_areas">
-              <NotasCredito />
-            </Privada>
-          }
-        />
+        {/* Sin permiso: el backend acota por área igual que en /facturas */}
+        <Route path="/notas-credito" element={<NotasCredito />} />
         <Route path="/firmas" element={<MisFirmas />} />
         <Route
           path="/admin"

@@ -23,30 +23,50 @@ from app.services.blob_storage import get_almacen
 BASE = "http://127.0.0.1:8000"
 NIT = "900777666"
 NUMERO = "TCM-77"
+NUMERO_USD = "TCM-USD-9"
 
-buf = BytesIO()
-c = rl_canvas.Canvas(buf, pagesize=(612, 792))
-lineas = [
+
+def _pdf(lineas):
+    buf = BytesIO()
+    c = rl_canvas.Canvas(buf, pagesize=(612, 792))
+    for i, linea in enumerate(lineas):
+        c.drawString(72, 720 - i * 24, linea)
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+PDF = _pdf([
     "FACTURA ELECTRONICA DE VENTA No. TCM-77",
     "Emisor: PROVEEDOR PRUEBA CARGA MANUAL S.A.S.",
     "NIT: 900.777.666-1",
     "Fecha de emision: 2026-07-15",
+    "Fecha de vencimiento: 2026-08-14",
     "Cliente: KOS COLOMBIA",
     "Concepto: servicio de mantenimiento de prueba",
     "Subtotal: 1.000.000    IVA (19%): 190.000",
     "TOTAL A PAGAR: $1.190.000",
-]
-for i, linea in enumerate(lineas):
-    c.drawString(72, 720 - i * 24, linea)
-c.showPage()
-c.save()
-PDF = buf.getvalue()
+])
+
+PDF_USD = _pdf([
+    "INVOICE / FACTURA DE VENTA No. TCM-USD-9",
+    "Emisor: PROVEEDOR PRUEBA CARGA MANUAL S.A.S.",
+    "NIT: 900.777.666-1",
+    "Fecha de emision: 2026-07-20",
+    "Fecha de vencimiento: 2026-09-18",
+    "Moneda: USD (dolares americanos)",
+    "TRM aplicada: 4123.45 COP/USD",
+    "Concepto: licencia anual de software",
+    "Subtotal: USD 840.34    IVA: USD 159.66",
+    "TOTAL A PAGAR: USD 1,000.00",
+])
 
 cl = httpx.Client(base_url=BASE, timeout=120)
 r = cl.post("/api/auth/login", data={"username": "oscar.orozco03@gmail.com", "password": "Admin1234*"})
 cl.headers["Authorization"] = f"Bearer {r.json()['access_token']}"
 
 factura_id = None
+factura_id_usd = None
 try:
     # 1) extracción con IA (real)
     r = cl.post("/api/facturas/carga/extraer", files={"archivo": ("prueba.pdf", PDF, "application/pdf")})
@@ -95,12 +115,55 @@ try:
                 files={"archivo": ("prueba.pdf", PDF, "application/pdf")})
     assert r.status_code == 409, r.text
     print(f"5) duplicado rechazado (409: {r.json()['detail']}): OK")
+
+    # 6) extracción de factura en USD: moneda, TRM y vencimiento
+    r = cl.post("/api/facturas/carga/extraer",
+                files={"archivo": ("usd.pdf", PDF_USD, "application/pdf")})
+    assert r.status_code == 200, r.text
+    ext = r.json()
+    print(f"6) extracción USD -> {ext}")
+    assert ext["moneda"] == "USD", f"moneda extraída mal: {ext['moneda']}"
+    assert float(ext["trm"]) == 4123.45, f"TRM extraída mal: {ext['trm']}"
+    assert float(ext["valor_total"]) == 1000, f"valor USD extraído mal: {ext['valor_total']}"
+    assert ext["fecha_vencimiento"] == "2026-09-18", f"vencimiento mal: {ext['fecha_vencimiento']}"
+    print("6) la IA detectó USD, TRM, valor en dólares y vencimiento: OK")
+
+    # 7) USD sin TRM -> 400
+    datos_usd = {"nit": NIT, "razon_social": "PROVEEDOR PRUEBA CARGA MANUAL S.A.S.",
+                 "numero": NUMERO_USD, "fecha_emision": "2026-07-20",
+                 "fecha_vencimiento": "2026-09-18", "valor_total": "1000",
+                 "iva": "159.66", "moneda": "USD"}
+    r = cl.post("/api/facturas/carga", data=datos_usd,
+                files={"archivo": ("usd.pdf", PDF_USD, "application/pdf")})
+    assert r.status_code == 400 and "TRM" in r.json()["detail"], r.text
+    print("7) USD sin TRM rechazado (400): OK")
+
+    # 8) crear la factura USD: la BD guarda COP convertidos + valor original
+    r = cl.post("/api/facturas/carga", data={**datos_usd, "trm": "4123.45"},
+                files={"archivo": ("usd.pdf", PDF_USD, "application/pdf")})
+    assert r.status_code == 200, r.text
+    f = r.json()
+    factura_id_usd = f["id"]
+    assert f["moneda"] == "USD" and float(f["trm"]) == 4123.45
+    assert float(f["valor_total"]) == 4123450.00, f"conversión mal: {f['valor_total']}"
+    assert float(f["valor_original"]) == 1000
+    assert float(f["iva"]) == 658350.03, f"IVA convertido mal: {f['iva']}"  # 159.66*4123.45
+    assert str(f["fecha_vencimiento"]).startswith("2026-09-18")
+    db = SessionLocal()
+    ev = db.execute(select(Evento).where(
+        Evento.factura_id == factura_id_usd, Evento.accion == "carga_manual")).scalar_one()
+    db.close()
+    assert "TRM 4123.45" in ev.detalle.replace("4123.4500", "4123.45")
+    print(f"8) factura USD id={factura_id_usd}: valor_total {f['valor_total']} COP "
+          f"(USD 1000 x 4123.45), vencimiento y evento con TRM: OK")
 finally:
     db = SessionLocal()
-    if factura_id:
-        db.query(Evento).filter(Evento.factura_id == factura_id).delete()
-        db.query(Documento).filter(Documento.factura_id == factura_id).delete()
-        fx = db.get(Factura, factura_id)
+    for fid in (factura_id, factura_id_usd):
+        if not fid:
+            continue
+        db.query(Evento).filter(Evento.factura_id == fid).delete()
+        db.query(Documento).filter(Documento.factura_id == fid).delete()
+        fx = db.get(Factura, fid)
         blob = fx.blob_pdf
         db.delete(fx)
         db.commit()

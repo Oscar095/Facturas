@@ -7,7 +7,8 @@ Flujo de una corrida (todo dentro de la misma sesión de navegador):
          crean una Factura (diferenciados por `tipo_documento`) con su documento
          FV, asignación de área por reglas y evaluación de completitud.
        - Notas Crédito (tipo_doc=91): módulo aparte (tabla `notas_credito`),
-         solo extracción y guardado — sin área ni flujo de aprobación.
+         con asignación de área por reglas (sin IA) pero sin documentos ni
+         flujo de completitud/aprobación.
   3. Cerrar la ejecución con contadores (facturas_nuevas, notas_credito_nuevas).
 
 Es idempotente: una segunda corrida sobre el mismo rango no duplica nada
@@ -28,6 +29,7 @@ from ..models import Documento, Ejecucion, Evento, Factura, NotaCredito, Proveed
 from ..services import reglas
 from ..services.blob_storage import get_almacen
 from ..services.pdf_texto import extraer_texto
+from ..services.vencimiento import resolver_vencimiento
 from .siesa_client import DocumentoPortal, SiesaClient
 
 log = logging.getLogger("ingesta")
@@ -68,7 +70,7 @@ def _existe_cufe_nc(db: Session, cufe: str) -> bool:
 
 
 def _crear_factura(db: Session, doc: DocumentoPortal, siesa: SiesaClient, almacen,
-                   tipo_documento: str = "FACTURA") -> Factura:
+                   tipo_documento: str = "FACTURA", usar_ia_vencimiento: bool = False) -> Factura:
     prov = _upsert_proveedor(db, doc.nit_emisor, doc.emisor)
 
     # Descargar y subir el PDF (documento FV; un Documento Equivalente lo reemplaza
@@ -79,6 +81,11 @@ def _crear_factura(db: Session, doc: DocumentoPortal, siesa: SiesaClient, almace
     ruta = _ruta_blob(doc.nit_emisor, doc.folio, doc.fecha)
     almacen.subir(ruta, pdf, content_type="application/pdf")
 
+    # texto de la factura: patrones de ítem (reglas de área) y fecha de vencimiento
+    texto = extraer_texto(pdf)
+    vencimiento, venc_por_ia = resolver_vencimiento(
+        texto, doc.fecha, pdf=pdf, usar_ia=usar_ia_vencimiento
+    )
     factura = Factura(
         cufe=doc.cufe,
         prefijo="",
@@ -86,13 +93,14 @@ def _crear_factura(db: Session, doc: DocumentoPortal, siesa: SiesaClient, almace
         proveedor_id=prov.id,
         fecha_emision=doc.fecha,
         fecha_recepcion=ahora(),
+        # el portal no la expone: se deduce del PDF (regex, y IA como último recurso)
+        fecha_vencimiento=vencimiento,
         valor_total=doc.valor,
         estado_portal=doc.estado_adquiriente,
         estado_proceso="nueva",
         blob_pdf=ruta,
         tipo_documento=tipo_documento,
-        # texto de la factura para evaluar patrones de ítem (reglas de área)
-        texto_pdf=extraer_texto(pdf),
+        texto_pdf=texto,
     )
     db.add(factura)
     db.flush()
@@ -106,6 +114,9 @@ def _crear_factura(db: Session, doc: DocumentoPortal, siesa: SiesaClient, almace
     ))
     db.add(Evento(factura_id=factura.id, accion="ingesta",
                   detalle=f"Descargada del portal (folio {doc.folio})"))
+    if venc_por_ia:
+        db.add(Evento(factura_id=factura.id, accion="ia_vencimiento",
+                      detalle=f"IA dedujo el vencimiento: {vencimiento.date()}"))
 
     reglas.asignar_area(db, factura)
     db.flush()
@@ -116,7 +127,8 @@ def _crear_factura(db: Session, doc: DocumentoPortal, siesa: SiesaClient, almace
 
 def _crear_nota_credito(db: Session, doc: DocumentoPortal, siesa: SiesaClient, almacen) -> NotaCredito:
     """Notas crédito no pasan por el flujo de aprobación: se extraen y se guardan
-    para consulta, sin área/responsable/documentos/eventos."""
+    para consulta, sin documentos/eventos. Sí se les asigna área con las mismas
+    reglas del proveedor (sin IA), para saber a quién corresponde el crédito."""
     prov = _upsert_proveedor(db, doc.nit_emisor, doc.emisor)
 
     pdf = siesa.descargar_pdf(doc.cufe, doc.fecha, tipo_doc="91")
@@ -133,19 +145,28 @@ def _crear_nota_credito(db: Session, doc: DocumentoPortal, siesa: SiesaClient, a
         valor_total=doc.valor,
         estado_portal=doc.estado_adquiriente,
         blob_pdf=ruta,
+        # texto de la nota para evaluar patrones de ítem (reglas de área)
+        texto_pdf=extraer_texto(pdf),
     )
     db.add(nota)
+    db.flush()
+
+    reglas.asignar_area_nota_credito(db, nota)
     db.flush()
     return nota
 
 
 def sincronizar(db: Session, dias: int = 3,
                 fecha_desde: str | None = None, fecha_hasta: str | None = None,
-                limite: int | None = None) -> dict:
+                limite: int | None = None,
+                usar_ia_vencimiento: bool = True) -> dict:
     """Ejecuta una corrida de ingesta. Devuelve un resumen para n8n/logs.
 
     limite: si se indica, procesa como máximo esa cantidad de facturas nuevas
     (útil para pruebas y para acotar corridas muy grandes).
+    usar_ia_vencimiento: permite que la IA (Haiku) deduzca la fecha de
+    vencimiento SOLO en las facturas donde los patrones gratuitos no la
+    encontraron. Pasar False para una corrida sin gasto de API.
     """
     hoy = date.today()
     desde = fecha_desde or (hoy - timedelta(days=dias)).isoformat()
@@ -178,7 +199,8 @@ def sincronizar(db: Session, dias: int = 3,
                 if _existe_cufe(db, doc.cufe):
                     continue
                 try:
-                    f = _crear_factura(db, doc, siesa, almacen, tipo_documento="FACTURA")
+                    f = _crear_factura(db, doc, siesa, almacen, tipo_documento="FACTURA",
+                                       usar_ia_vencimiento=usar_ia_vencimiento)
                     db.commit()
                     nuevas += 1
                     if f.area_id is None:
@@ -199,7 +221,8 @@ def sincronizar(db: Session, dias: int = 3,
                 if _existe_cufe(db, doc.cufe):
                     continue
                 try:
-                    f = _crear_factura(db, doc, siesa, almacen, tipo_documento="EQUIVALENTE")
+                    f = _crear_factura(db, doc, siesa, almacen, tipo_documento="EQUIVALENTE",
+                                       usar_ia_vencimiento=usar_ia_vencimiento)
                     db.commit()
                     nuevas += 1
                     if f.area_id is None:
