@@ -38,7 +38,8 @@ with sync_playwright() as p:
     expect(page.locator("table.tabla tbody tr", has_text="COL2051775")).to_have_count(1, timeout=8000)
     badges = page.locator("table.tabla tbody .badge.t-equivalente").count()
     filas_eq = page.locator("table.tabla tbody tr").count()
-    assert badges == filas_eq == 3, f"badges={badges} filas={filas_eq}"
+    # sin fijar el número: la ingesta real va sumando equivalentes con el tiempo
+    assert filas_eq > 0 and badges == filas_eq, f"badges={badges} filas={filas_eq}"
     print(f"3) filtro Tipo=Equivalente muestra {filas_eq} filas, todas con badge: OK")
 
     page.select_option(".filtros select >> nth=1", "")
@@ -46,7 +47,8 @@ with sync_playwright() as p:
     page.fill(".filtro-fecha input >> nth=0", "2026-07-16")
     page.fill(".filtro-fecha input >> nth=1", "2026-07-16")
     expect(page.locator("table.tabla tbody tr", has_text="COL2026128")).to_have_count(1, timeout=8000)
-    textos = page.locator("table.tabla tbody td:nth-child(5)").all_inner_texts()
+    # 6ª columna: la 1ª es la casilla de selección para quien puede aprobar
+    textos = page.locator("table.tabla tbody td:nth-child(6)").all_inner_texts()
     assert all("16" in t for t in textos), f"fechas fuera de rango: {textos}"
     print(f"4) filtro de fechas: {len(textos)} facturas, todas emitidas el 16 jul: OK")
 

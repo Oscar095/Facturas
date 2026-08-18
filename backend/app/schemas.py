@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class Token(BaseModel):
@@ -145,6 +145,7 @@ class FacturaResumen(BaseModel):
     estado_proceso: str
     tipo_orden: str | None
     tipo_documento: str = "FACTURA"
+    observaciones: str | None = None  # nota de quien carga los docs para el aprobador
     origen: str = "portal"  # portal | manual
     moneda: str = "COP"
     trm: Decimal | None = None
@@ -168,6 +169,31 @@ class FacturaActualizar(BaseModel):
 class AprobarIn(BaseModel):
     """Aprobación de factura: con qué firma del usuario se sellan los documentos."""
     firma_id: int
+
+
+class ObservacionesIn(BaseModel):
+    """Nota libre para el jefe aprobador. Cadena vacía = borrar la observación."""
+    observaciones: str | None = Field(None, max_length=2000)
+
+
+class AprobarLoteIn(AprobarIn):
+    """Aprobación en bloque desde el listado (ids de las facturas marcadas)."""
+    ids: list[int]
+
+
+class ResultadoAprobacion(BaseModel):
+    """Qué pasó con UNA factura del lote (un fallo no aborta las demás)."""
+    factura_id: int
+    numero: str | None = None
+    estado: str  # aprobada | omitida | error
+    detalle: str
+
+
+class ResumenAprobacionLote(BaseModel):
+    aprobadas: int
+    omitidas: int
+    errores: int
+    resultados: list[ResultadoAprobacion]
 
 
 class ExtraccionFactura(BaseModel):

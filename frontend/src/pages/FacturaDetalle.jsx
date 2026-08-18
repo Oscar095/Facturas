@@ -35,6 +35,27 @@ export default function FacturaDetalle() {
     if (puedeEditar) api.get("/api/areas").then(setAreas).catch(() => setAreas([]));
   }, [puedeEditar]);
 
+  // ── observaciones para el jefe aprobador ──
+  // Se sincroniza solo al cambiar de factura (no en cada refresco del objeto),
+  // para no pisar lo que el usuario está escribiendo cuando otra acción
+  // (subir un documento, procesar…) devuelve la factura actualizada.
+  const [obs, setObs] = useState("");
+  const [guardandoObs, setGuardandoObs] = useState(false);
+  useEffect(() => setObs(factura?.observaciones || ""), [factura?.id]);
+  const obsSinGuardar = !!factura && obs !== (factura.observaciones || "");
+
+  async function guardarObservaciones() {
+    setGuardandoObs(true);
+    setError("");
+    try {
+      setFactura(await api.put(`/api/facturas/${id}/observaciones`, { observaciones: obs }));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setGuardandoObs(false);
+    }
+  }
+
   async function cambiarArea(e) {
     const area_id = Number(e.target.value);
     if (!area_id) return;
@@ -217,6 +238,34 @@ export default function FacturaDetalle() {
       </div>
 
       {error && <div className="error">{error}</div>}
+
+      <div className="observaciones">
+        <div className="observaciones-cabecera">
+          <h3>Observaciones para el aprobador</h3>
+          {obsSinGuardar && <span className="sin-guardar">sin guardar</span>}
+        </div>
+        <p className="ayuda">
+          Información relevante que el jefe debe tener en cuenta al aprobar
+          (por qué falta un documento, a qué proyecto corresponde, etc.).
+        </p>
+        <textarea
+          value={obs}
+          maxLength={2000}
+          rows={3}
+          placeholder="Escribe aquí una nota para quien aprueba esta factura…"
+          onChange={(e) => setObs(e.target.value)}
+        />
+        <div className="observaciones-acciones">
+          <button className="btn" onClick={guardarObservaciones} disabled={guardandoObs || !obsSinGuardar}>
+            {guardandoObs ? "Guardando…" : "Guardar observaciones"}
+          </button>
+          {obsSinGuardar && (
+            <button className="btn-sec" onClick={() => setObs(factura.observaciones || "")}>
+              Descartar cambios
+            </button>
+          )}
+        </div>
+      </div>
 
       {factura.faltantes?.length > 0 &&
         !["procesada", "aprobada", "contabilizada"].includes(factura.estado_proceso) && (

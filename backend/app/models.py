@@ -145,6 +145,11 @@ class Factura(Base):
     estado_portal: Mapped[str | None] = mapped_column(String(60), nullable=True)
     estado_proceso: Mapped[str] = mapped_column(String(30), default="nueva", index=True)
     tipo_orden: Mapped[str | None] = mapped_column(String(10), nullable=True)  # OCN | OCS
+    # Nota libre de quien carga los documentos para el jefe que aprueba (contexto
+    # que no se deduce de los adjuntos). La escribe cualquiera con acceso al área
+    # de la factura: NO exige el permiso editar_facturas, porque el mismo usuario
+    # que sube OCN/OCS/CRN debe poder explicarlos.
+    observaciones: Mapped[str | None] = mapped_column(Text, nullable=True)
     area_id: Mapped[int | None] = mapped_column(ForeignKey("areas.id"), nullable=True)
     responsable_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
     blob_pdf: Mapped[str | None] = mapped_column(String(500), nullable=True)

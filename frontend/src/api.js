@@ -41,6 +41,7 @@ async function request(method, url, { body, form, headers = {} } = {}) {
 export const api = {
   get: (u) => request("GET", u),
   post: (u, body) => request("POST", u, { body }),
+  put: (u, body) => request("PUT", u, { body }),
   patch: (u, body) => request("PATCH", u, { body }),
   del: (u) => request("DELETE", u),
   postForm: (u, form) => request("POST", u, { form }),

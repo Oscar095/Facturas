@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../auth.jsx";
 import {
@@ -7,22 +7,43 @@ import {
   ESTADOS, TIPOS_FACTURA,
 } from "../util";
 
+// Estados desde los que el jefe todavía puede aprobar (las ya aprobadas o
+// contabilizadas no se pueden seleccionar).
+const APROBABLES = ["asignada", "docs_pendientes", "lista_contabilizar", "procesada"];
+
+function esAprobable(f) {
+  return !!f.area && APROBABLES.includes(f.estado_proceso);
+}
+
 export default function Facturas() {
   const { usuario } = useAuth();
   const navigate = useNavigate();
+  // Los filtros viven en la URL (no en el estado del componente): así, al entrar
+  // a una factura y volver con ←, la lista reaparece exactamente como estaba.
+  // Cada cambio de filtro REEMPLAZA la entrada del historial en vez de apilar
+  // una nueva — si no, "Volver" tendría que deshacer tecleo por tecleo.
+  const [params, setParams] = useSearchParams();
+  const qs = params.toString();
+  const filtros = useMemo(() => {
+    const p = new URLSearchParams(qs);
+    return {
+      estado: p.get("estado") || "",
+      area_id: p.get("area_id") || "",
+      proveedor: p.get("proveedor") || "",
+      tipo_documento: p.get("tipo_documento") || "",
+      fecha_desde: p.get("fecha_desde") || "",
+      fecha_hasta: p.get("fecha_hasta") || "",
+      solo_mias: p.get("solo_mias") === "true",
+      pagina: Math.max(1, Number(p.get("pagina")) || 1),
+    };
+  }, [qs]);
+
   const [data, setData] = useState({ items: [], total: 0 });
   const [areas, setAreas] = useState([]);
-  const [filtros, setFiltros] = useState({
-    estado: "",
-    area_id: "",
-    proveedor: "",
-    tipo_documento: "",
-    fecha_desde: "",
-    fecha_hasta: "",
-    solo_mias: false,
-    pagina: 1,
-  });
   const [cargando, setCargando] = useState(true);
+  const [refresco, setRefresco] = useState(0);
+
+  const puedeAprobar = tienePermiso(usuario, "aprobar");
 
   useEffect(() => {
     api.get("/api/areas").then(setAreas).catch(() => setAreas([]));
@@ -44,14 +65,103 @@ export default function Facturas() {
       .then(setData)
       .catch(() => setData({ items: [], total: 0 }))
       .finally(() => setCargando(false));
-  }, [filtros]);
+  }, [filtros, refresco]);
 
+  // Se actualiza con la forma funcional (recibe los params vigentes) y no con
+  // el `qs` de este render: dos filtros cambiados muy seguido —o dos campos de
+  // un rango de fechas— usarían una copia vieja y el segundo borraría al primero.
   function set(campo, valor) {
-    setFiltros((f) => ({ ...f, [campo]: valor, pagina: 1 }));
+    setParams((previos) => {
+      const p = new URLSearchParams(previos);
+      if (valor === "" || valor === false || valor == null) p.delete(campo);
+      else p.set(campo, String(valor));
+      p.delete("pagina"); // cambiar un filtro vuelve a la primera página
+      return p;
+    }, { replace: true });
+  }
+
+  function irPagina(n) {
+    setParams((previos) => {
+      const p = new URLSearchParams(previos);
+      if (n <= 1) p.delete("pagina");
+      else p.set("pagina", String(n));
+      return p;
+    }, { replace: true });
+  }
+
+  // ── selección en bloque ──
+  const [seleccion, setSeleccion] = useState(() => new Set());
+  const [panelLote, setPanelLote] = useState(false);
+  const [firmas, setFirmas] = useState([]);
+  const [firmaSel, setFirmaSel] = useState("");
+  const [aprobando, setAprobando] = useState(false);
+  const [resultado, setResultado] = useState(null);
+  const [error, setError] = useState("");
+
+  // Al cambiar filtros o página la selección deja de tener sentido: las filas
+  // marcadas ya no están a la vista y el jefe no vería qué está aprobando.
+  useEffect(() => {
+    setSeleccion(new Set());
+    setPanelLote(false);
+  }, [qs]);
+
+  const aprobables = data.items.filter(esAprobable);
+  const todasMarcadas = aprobables.length > 0 && aprobables.every((f) => seleccion.has(f.id));
+
+  function alternar(id) {
+    setSeleccion((s) => {
+      const nueva = new Set(s);
+      if (nueva.has(id)) nueva.delete(id);
+      else nueva.add(id);
+      return nueva;
+    });
+  }
+
+  function alternarTodas() {
+    setSeleccion(todasMarcadas ? new Set() : new Set(aprobables.map((f) => f.id)));
+  }
+
+  async function abrirPanelLote() {
+    setError("");
+    setResultado(null);
+    try {
+      const lista = await api.get("/api/firmas");
+      setFirmas(lista);
+      setFirmaSel(lista.length ? String(lista[0].id) : "");
+      setPanelLote(true);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function aprobarLote() {
+    const ids = [...seleccion];
+    const mensaje =
+      `Vas a aprobar y firmar ${ids.length} factura(s) con tu firma.\n\n` +
+      "Las que aún no estén procesadas se procesarán en el mismo paso: al " +
+      "seleccionarlas declaras que sus documentos son suficientes.\n\n¿Continuar?";
+    if (!confirm(mensaje)) return;
+    setAprobando(true);
+    setError("");
+    try {
+      const r = await api.post("/api/facturas/aprobar-lote", {
+        ids,
+        firma_id: Number(firmaSel),
+      });
+      setResultado(r);
+      setSeleccion(new Set());
+      setPanelLote(false);
+      setRefresco((n) => n + 1);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setAprobando(false);
+    }
   }
 
   const porPagina = data.por_pagina || 25;
   const totalPaginas = Math.max(1, Math.ceil(data.total / porPagina));
+  const columnas = puedeAprobar ? 10 : 9;
 
   return (
     <div>
@@ -118,10 +228,85 @@ export default function Facturas() {
         </label>
       </div>
 
+      {error && <div className="error">{error}</div>}
+
+      {resultado && (
+        <div className={`aviso ${resultado.errores === 0 ? "ok" : ""}`}>
+          <b>{resultado.aprobadas}</b> factura(s) aprobadas y firmadas
+          {resultado.omitidas > 0 && ` · ${resultado.omitidas} omitida(s)`}
+          {resultado.errores > 0 && ` · ${resultado.errores} con error`}
+          {resultado.resultados.some((r) => r.estado !== "aprobada") && (
+            <ul className="lista-lote">
+              {resultado.resultados
+                .filter((r) => r.estado !== "aprobada")
+                .map((r) => (
+                  <li key={r.factura_id}>
+                    <span className="mono">{r.numero || r.factura_id}</span> — {r.detalle}
+                  </li>
+                ))}
+            </ul>
+          )}
+          <button className="btn-link" onClick={() => setResultado(null)}>
+            Cerrar
+          </button>
+        </div>
+      )}
+
+      {puedeAprobar && seleccion.size > 0 && (
+        <div className="barra-lote">
+          <span>
+            <b>{seleccion.size}</b> factura(s) seleccionada(s)
+          </span>
+          {!panelLote ? (
+            <button className="btn exito" onClick={abrirPanelLote}>
+              ✍️ Aprobar y firmar
+            </button>
+          ) : firmas.length === 0 ? (
+            <span className="ayuda">
+              No tienes firmas guardadas — súbela primero en “Mis Firmas”.
+            </span>
+          ) : (
+            <>
+              <select value={firmaSel} onChange={(e) => setFirmaSel(e.target.value)}>
+                {firmas.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.nombre} ({f.nombre_archivo})
+                  </option>
+                ))}
+              </select>
+              <button className="btn exito" onClick={aprobarLote} disabled={aprobando}>
+                {aprobando ? "Firmando…" : "Confirmar y firmar"}
+              </button>
+            </>
+          )}
+          <button
+            className="btn-sec"
+            disabled={aprobando}
+            onClick={() => {
+              setSeleccion(new Set());
+              setPanelLote(false);
+            }}
+          >
+            Limpiar
+          </button>
+        </div>
+      )}
+
       <div className="tabla-wrap">
         <table className="tabla">
           <thead>
             <tr>
+              {puedeAprobar && (
+                <th className="col-check">
+                  <input
+                    type="checkbox"
+                    title="Seleccionar todas las facturas aprobables de esta página"
+                    checked={todasMarcadas}
+                    disabled={aprobables.length === 0}
+                    onChange={alternarTodas}
+                  />
+                </th>
+              )}
               <th>Folio</th>
               <th>Tipo</th>
               <th>Proveedor</th>
@@ -136,13 +321,13 @@ export default function Facturas() {
           <tbody>
             {cargando ? (
               <tr>
-                <td colSpan="9" className="vacio">
+                <td colSpan={columnas} className="vacio">
                   Cargando…
                 </td>
               </tr>
             ) : data.items.length === 0 ? (
               <tr>
-                <td colSpan="9" className="vacio">
+                <td colSpan={columnas} className="vacio">
                   No hay facturas con estos filtros.
                 </td>
               </tr>
@@ -150,9 +335,40 @@ export default function Facturas() {
               data.items.map((f, i) => {
                 const b = badgeEstado(f.estado_proceso);
                 const t = badgeTipoDocumento(f.tipo_documento);
+                const marcada = seleccion.has(f.id);
                 return (
-                  <tr key={f.id} style={{ "--i": i }} onClick={() => navigate(`/facturas/${f.id}`)}>
-                    <td className="mono">{f.numero}</td>
+                  <tr
+                    key={f.id}
+                    style={{ "--i": i }}
+                    className={marcada ? "marcada" : ""}
+                    onClick={() => navigate(`/facturas/${f.id}`)}
+                  >
+                    {puedeAprobar && (
+                      /* el clic en la casilla NO debe abrir el detalle */
+                      <td className="col-check" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={marcada}
+                          disabled={!esAprobable(f)}
+                          title={
+                            esAprobable(f)
+                              ? "Seleccionar para aprobar en bloque"
+                              : f.area
+                                ? `No se puede aprobar: ya está ${f.estado_proceso}`
+                                : "No se puede aprobar: sin área asignada"
+                          }
+                          onChange={() => alternar(f.id)}
+                        />
+                      </td>
+                    )}
+                    <td className="mono">
+                      {f.numero}
+                      {f.observaciones && (
+                        <span className="marca-obs" title={f.observaciones}>
+                          💬
+                        </span>
+                      )}
+                    </td>
                     <td>
                       <span className={`badge ${t.clase}`}>{t.texto}</span>
                     </td>
@@ -180,7 +396,7 @@ export default function Facturas() {
         <button
           className="btn-sec"
           disabled={filtros.pagina <= 1}
-          onClick={() => setFiltros((f) => ({ ...f, pagina: f.pagina - 1 }))}
+          onClick={() => irPagina(filtros.pagina - 1)}
         >
           ← Anterior
         </button>
@@ -190,7 +406,7 @@ export default function Facturas() {
         <button
           className="btn-sec"
           disabled={filtros.pagina >= totalPaginas}
-          onClick={() => setFiltros((f) => ({ ...f, pagina: f.pagina + 1 }))}
+          onClick={() => irPagina(filtros.pagina + 1)}
         >
           Siguiente →
         </button>

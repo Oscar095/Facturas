@@ -130,6 +130,23 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
   omiten y queda anotado en el evento. **Contabilizar** exige `aprobada`.
   `evaluar_completitud` NUNCA degrada los estados manuales
   (`procesada`/`aprobada`/`contabilizada`). Todo queda auditado en `eventos`.
+- **Aprobar en bloque** (`POST /api/facturas/aprobar-lote`, body `{ids, firma_id}`): el jefe
+  de área marca varias facturas en el listado y las firma de una vez, sin entrar a cada una.
+  Las que aún no están `procesada` **se procesan en el mismo paso** (seleccionarlas ES la
+  declaración humana equivalente al botón Procesar; queda su propio evento `procesada` con
+  el detalle "procesada en aprobación por lote"). Se **omite sin abortar** lo que no se puede
+  aprobar (sin área, ya aprobada/contabilizada, de otra área) y cada factura **se confirma por
+  separado**: si una falla se hace rollback SOLO de esa y el lote sigue. La respuesta
+  (`ResumenAprobacionLote`) detalla el motivo por factura para que la UI lo muestre. Tope
+  `_MAX_LOTE = 100` porque firmar es caro (bajar + sellar + subir cada PDF). Reusa el mismo
+  `_sellar_documentos()` que la aprobación individual — no duplicar la lógica de sellado.
+- **Observaciones** (`PUT /api/facturas/{id}/observaciones`, `facturas.observaciones`): nota
+  libre que escribe quien carga los documentos para el jefe que aprueba. Deliberadamente **NO
+  exige `editar_facturas`** (que sí protege área/orden/responsable), solo acceso al área de la
+  factura — mismo criterio que `routers/documentos.py`: quien sube la OCN debe poder
+  explicarla. Texto en blanco la borra (queda NULL); tope 2000 chars (422); auditada como
+  evento `observaciones`. Viaja en `FacturaResumen`, así el listado muestra el indicador 💬
+  con la nota en el tooltip y el jefe la lee antes de aprobar en bloque.
 - **OCN/OCS/CRN los sube el usuario** desde el portal — **nunca** se extraen del portal Siesa.
 - **Asignación de área** (`asignar_area`, cascada de más barata a más cara):
   1. NIT con una sola área en `reglas_area` → directo.
@@ -235,6 +252,17 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
   `fecha_recepcion`): la emisión se guarda tal cual la entrega el portal (hora local de
   Colombia), así que se compara directo. NO "corregir" esto a `fecha_recepcion` sin aplicar
   el desfase de Bogotá (esa columna sí está en UTC — ver gotcha del Dashboard).
+- **Los filtros viven en la URL** (`useSearchParams` en `Facturas.jsx`), no en el estado del
+  componente: al entrar a una factura y volver con ← la lista reaparece igual. Cada cambio de
+  filtro va con `{ replace: true }` — si apilara entradas de historial, "Volver" tendría que
+  deshacer tecleo por tecleo. Y se escribe con la **forma funcional** de `setParams`
+  (`setParams(previos => …)`), no con el `qs` del render: dos campos cambiados muy seguido
+  (p. ej. desde/hasta del rango) usarían una copia vieja y el segundo borraría al primero —
+  esto ya ocurrió y lo destapó `probar_ui_tipos_fechas.py`.
+- La **casilla de selección** de la 1ª columna solo se pinta para quien tiene el permiso
+  `aprobar`; ojo con las pruebas de UI que indexan columnas por `nth-child` (se corrió una).
+  La selección se limpia al cambiar de filtro o página (las filas marcadas ya no están a la
+  vista) y el clic en la casilla hace `stopPropagation` para no abrir el detalle.
 
 ## Notas Crédito (`/notas-credito`, `routers/notas_credito.py`)
 

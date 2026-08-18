@@ -263,6 +263,48 @@ a:hover { text-decoration: underline; }
   font-family: var(--f-cuerpo); font-size: 13px; background: var(--papel-alto); color: var(--tinta);
 }
 
+/* ── selección múltiple y aprobación en bloque ── */
+.tabla .col-check { width: 38px; padding-right: 0; text-align: center; }
+.tabla .col-check input { width: 16px; height: 16px; cursor: pointer; accent-color: var(--marca); }
+.tabla .col-check input:disabled { cursor: default; opacity: 0.35; }
+.tabla tbody tr.marcada { background: var(--marca-suave); }
+.tabla tbody tr.marcada:hover { background: #d3ebf8; }
+/* la nota para el aprobador se anuncia en el listado; el texto va en el title */
+.marca-obs { margin-left: 6px; cursor: help; font-size: 12px; }
+
+.barra-lote {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: var(--marca-osc); color: var(--marca-texto);
+  padding: 12px 18px; border-radius: var(--radio); margin-bottom: 14px;
+  box-shadow: var(--sombra-chica); animation: entrar 0.3s var(--ease) both;
+}
+.barra-lote select {
+  padding: 8px 10px; border-radius: var(--radio-chico);
+  border: 1px solid var(--linea-fuerte); background: var(--papel-alto); color: var(--tinta);
+}
+.barra-lote .ayuda { color: #cfe0ef; }
+.barra-lote .btn-sec { background: transparent; color: #cfe0ef; border-color: rgba(234, 244, 252, 0.28); }
+.barra-lote .btn-sec:hover { background: rgba(234, 244, 252, 0.12); color: #fff; }
+.lista-lote { margin: 8px 0 4px; padding-left: 20px; font-size: 12.5px; }
+
+/* ── observaciones para el aprobador (detalle de factura) ── */
+.observaciones {
+  background: var(--papel-alto); border: 1px solid var(--linea);
+  border-left: 3px solid var(--rust); border-radius: var(--radio);
+  padding: 18px 20px; margin: 18px 0; box-shadow: var(--sombra-chica);
+}
+.observaciones-cabecera { display: flex; align-items: baseline; gap: 10px; }
+.observaciones-cabecera h3 { margin: 0; }
+.sin-guardar { color: var(--rust-osc); font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+.observaciones .ayuda { margin: 4px 0 10px; }
+.observaciones textarea {
+  width: 100%; padding: 10px 12px; border: 1px solid var(--linea-fuerte);
+  border-radius: var(--radio-chico); background: var(--papel-alto);
+  font-family: var(--f-cuerpo); font-size: 14px; color: var(--tinta); resize: vertical;
+}
+.observaciones textarea:focus { border-color: var(--marca); box-shadow: 0 0 0 3px var(--marca-suave); outline: none; }
+.observaciones-acciones { display: flex; gap: 10px; margin-top: 10px; }
+
 /* ── paginación ── */
 .paginacion { display: flex; align-items: center; justify-content: center; gap: 18px; margin-top: 20px; color: var(--tinta-sub); font-size: 13px; }
 
