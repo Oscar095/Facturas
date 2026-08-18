@@ -74,6 +74,16 @@ export function tienePermiso(usuario, permiso) {
   return !!PERMISOS_LEGADO[usuario.rol]?.[permiso];
 }
 
+// Fecha con hora: el historial de observaciones necesita distinguir varias
+// notas del mismo día.
+export function formatoFechaHora(v) {
+  if (!v) return "—";
+  return new Date(v).toLocaleString("es-CO", {
+    year: "numeric", month: "short", day: "2-digit",
+    hour: "2-digit", minute: "2-digit",
+  });
+}
+
 export function formatoFecha(v) {
   if (!v) return "—";
   return new Date(v).toLocaleDateString("es-CO", {

@@ -29,6 +29,7 @@ from ..models import Documento, Ejecucion, Evento, Factura, NotaCredito, Proveed
 from ..services import reglas
 from ..services.blob_storage import get_almacen
 from ..services.pdf_texto import extraer_texto
+from ..services.iva import extraer_iva
 from ..services.vencimiento import resolver_vencimiento
 from .siesa_client import DocumentoPortal, SiesaClient
 
@@ -81,11 +82,14 @@ def _crear_factura(db: Session, doc: DocumentoPortal, siesa: SiesaClient, almace
     ruta = _ruta_blob(doc.nit_emisor, doc.folio, doc.fecha)
     almacen.subir(ruta, pdf, content_type="application/pdf")
 
-    # texto de la factura: patrones de ítem (reglas de área) y fecha de vencimiento
+    # texto de la factura: patrones de ítem (reglas de área), fecha de vencimiento e IVA
     texto = extraer_texto(pdf)
     vencimiento, venc_por_ia = resolver_vencimiento(
         texto, doc.fecha, pdf=pdf, usar_ia=usar_ia_vencimiento
     )
+    # El portal solo entrega el total: el IVA se deduce del texto reconciliándolo
+    # contra ese total (services/iva.py). None = no se pudo determinar.
+    iva = extraer_iva(texto, doc.valor)
     factura = Factura(
         cufe=doc.cufe,
         prefijo="",
@@ -96,6 +100,7 @@ def _crear_factura(db: Session, doc: DocumentoPortal, siesa: SiesaClient, almace
         # el portal no la expone: se deduce del PDF (regex, y IA como último recurso)
         fecha_vencimiento=vencimiento,
         valor_total=doc.valor,
+        iva=iva,
         estado_portal=doc.estado_adquiriente,
         estado_proceso="nueva",
         blob_pdf=ruta,

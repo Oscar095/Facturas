@@ -132,21 +132,29 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
   (`procesada`/`aprobada`/`contabilizada`). Todo queda auditado en `eventos`.
 - **Aprobar en bloque** (`POST /api/facturas/aprobar-lote`, body `{ids, firma_id}`): el jefe
   de área marca varias facturas en el listado y las firma de una vez, sin entrar a cada una.
-  Las que aún no están `procesada` **se procesan en el mismo paso** (seleccionarlas ES la
-  declaración humana equivalente al botón Procesar; queda su propio evento `procesada` con
-  el detalle "procesada en aprobación por lote"). Se **omite sin abortar** lo que no se puede
-  aprobar (sin área, ya aprobada/contabilizada, de otra área) y cada factura **se confirma por
-  separado**: si una falla se hace rollback SOLO de esa y el lote sigue. La respuesta
-  (`ResumenAprobacionLote`) detalla el motivo por factura para que la UI lo muestre. Tope
-  `_MAX_LOTE = 100` porque firmar es caro (bajar + sellar + subir cada PDF). Reusa el mismo
-  `_sellar_documentos()` que la aprobación individual — no duplicar la lógica de sellado.
-- **Observaciones** (`PUT /api/facturas/{id}/observaciones`, `facturas.observaciones`): nota
-  libre que escribe quien carga los documentos para el jefe que aprueba. Deliberadamente **NO
-  exige `editar_facturas`** (que sí protege área/orden/responsable), solo acceso al área de la
-  factura — mismo criterio que `routers/documentos.py`: quien sube la OCN debe poder
-  explicarla. Texto en blanco la borra (queda NULL); tope 2000 chars (422); auditada como
-  evento `observaciones`. Viaja en `FacturaResumen`, así el listado muestra el indicador 💬
-  con la nota en el tooltip y el jefe la lee antes de aprobar en bloque.
+  Exige el mismo estado que la aprobación individual: **solo facturas ya `procesada`**
+  (decisión del usuario). Procesar sigue siendo un paso humano del detalle, y la UI solo deja
+  marcar las procesadas — el lote NO procesa por su cuenta. Se **omite sin abortar** lo que no
+  se puede aprobar (aún no procesada, sin área, ya aprobada/contabilizada, de otra área) y
+  cada factura **se confirma por separado**: si una falla se hace rollback SOLO de esa y el
+  lote sigue. La respuesta (`ResumenAprobacionLote`) detalla el motivo por factura para que la
+  UI lo muestre. Tope `_MAX_LOTE = 100` porque firmar es caro (bajar + sellar + subir cada
+  PDF). Reusa el mismo `_sellar_documentos()` que la aprobación individual — no duplicar la
+  lógica de sellado.
+- **Observaciones = HISTORIAL** (tabla `observaciones`, `POST /api/facturas/{id}/observaciones`):
+  notas de quien carga los documentos para el jefe que aprueba. Es **append-only**: cada nota
+  queda con su autor y su fecha y no se edita ni se borra — el aprobador debe leer toda la
+  conversación, no la última versión. Deliberadamente **NO exige `editar_facturas`** (que sí
+  protege área/orden/responsable), solo acceso al área de la factura — mismo criterio que
+  `routers/documentos.py`: quien sube la OCN debe poder explicarla. Tope 2000 chars y nota en
+  blanco → 422; cada una se audita además como evento `observacion`. El historial viaja en
+  `FacturaResumen` (con `selectinload`, si no serían N+1 consultas por página), así el listado
+  muestra el indicador 💬 con las notas en el tooltip y el jefe las lee antes de aprobar en
+  bloque. La UI lo pinta **al final del detalle**. Hubo una versión previa con una sola
+  columna `facturas.observaciones`: `scripts/migrar_observaciones_historial.py` copia su
+  contenido al historial (se migraron 14 notas reales de producción) y suelta la columna en
+  una fase aparte con `--soltar-columna`, que **solo se corre después de desplegar** (el
+  código viejo la mapea y sin ella revienta todo `select` sobre Factura).
 - **OCN/OCS/CRN los sube el usuario** desde el portal — **nunca** se extraen del portal Siesa.
 - **Asignación de área** (`asignar_area`, cascada de más barata a más cara):
   1. NIT con una sola área en `reglas_area` → directo.
@@ -246,6 +254,39 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
   `scripts/backfill_vencimiento.py [--ia] [--aplicar]` (solo toca filas NULL; sin `--ia` no
   gasta un peso). Costo medido con `scripts/estimar_costo_ia_vencimiento.py`: **~US$1/mes**.
 
+## IVA y valor sin IVA (`services/iva.py`)
+
+- **Todo el seguimiento del negocio se hace SIN IVA** (decisión del usuario): el listado, el
+  detalle y el dashboard muestran/suman `valor_total - iva`. `FacturaResumen.subtotal` es un
+  `computed_field` de Pydantic; en el panel es la expresión SQL
+  `Factura.valor_total - COALESCE(Factura.iva, 0)`. `valor_total` se conserva y se sigue
+  guardando **con** IVA — no cambiar eso: es el valor del documento.
+- **El portal Siesa NO expone el IVA ni la base gravable** (verificado con un spike sobre el
+  portal real: el JSON del listado tiene 23 claves y solo trae `valor`; no volver a intentarlo
+  a ciegas). Por eso el IVA se deduce del `texto_pdf` con `extraer_iva()`, que **no usa IA**.
+- La clave del método es que **el total ya se conoce**, así que no hace falta entender el
+  layout (que es caótico: separadores de miles en punto o en coma en el mismo universo de
+  proveedores, columnas revueltas, retenciones mezcladas). Dos niveles, ambos aritméticos:
+  1. A una tarifa legal el IVA está determinado (`total * r/(1+r)`); se acepta solo si ese
+     importe **aparece impreso**. Doble validación (reconcilia Y está escrito).
+  2. Si el total aparece etiquetado como subtotal / base gravable / total bruto, la factura no
+     lleva IVA → 0.
+  Lo demás queda en NULL: **`iva IS NULL` significa "no se pudo determinar"**, y ahí el
+  subtotal mostrado TODAVÍA incluye IVA — la UI lo marca con un `*` (`.iva-desconocido`).
+  No "rellenar" esos NULL con 0: sería presentar como base un valor con impuesto.
+- **Gotcha — tarifas**: solo 19% y 5%. NO agregar 8% (eso es impoconsumo, no IVA) ni 16%
+  (derogada): medido sobre los PDF reales, solo sumaban coincidencias. Y se descartó un tercer
+  nivel que tomaba el importe etiquetado junto a "IVA": en las facturas de importación elegía
+  el flete o el gravamen arancelario.
+- Cobertura real: **397/622 = 64% del total** (84% de las que tienen `texto_pdf`); las 149 sin
+  texto son las escaneadas, las mismas que no tienen vencimiento. Pruebas:
+  `scripts/probar_iva.py` (17 casos con fragmentos reales, incluidos los que DEBEN dar None).
+  Backfill idempotente: `scripts/backfill_iva.py [--aplicar]` (solo toca filas NULL, nunca
+  pisa el IVA que extrajo la IA en la carga manual). La ingesta lo llena de aquí en adelante.
+- **Notas crédito**: siguen mostrando su valor total. Sus 22 filas históricas no tienen `iva`
+  ni `texto_pdf`, así que no hay de dónde deducirlo — si se quiere el mismo tratamiento hay
+  que re-descargar sus PDF del Blob primero.
+
 ## Listado de facturas
 
 - `GET /api/facturas` filtra por `fecha_desde`/`fecha_hasta` sobre **`fecha_emision`** (no
@@ -255,10 +296,21 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
 - **Los filtros viven en la URL** (`useSearchParams` en `Facturas.jsx`), no en el estado del
   componente: al entrar a una factura y volver con ← la lista reaparece igual. Cada cambio de
   filtro va con `{ replace: true }` — si apilara entradas de historial, "Volver" tendría que
-  deshacer tecleo por tecleo. Y se escribe con la **forma funcional** de `setParams`
-  (`setParams(previos => …)`), no con el `qs` del render: dos campos cambiados muy seguido
-  (p. ej. desde/hasta del rango) usarían una copia vieja y el segundo borraría al primero —
-  esto ya ocurrió y lo destapó `probar_ui_tipos_fechas.py`.
+  deshacer tecleo por tecleo.
+- **Gotcha 1 — componer varios filtros**: cada cambio parte de
+  `new URLSearchParams(window.location.search)`, NO del `params` del render ni de la forma
+  funcional `setParams(previos => …)`. React Router le pasa al updater los params **del
+  closure del render actual** (verificado en su código), así que dos cambios seguidos antes de
+  re-renderizar —los dos campos del rango de fechas, o un select seguido de un input— hacen
+  que el segundo borre al primero. `navigate()` sí actualiza `window.location` de forma
+  síncrona, por eso leer de ahí es lo único correcto.
+- **Gotcha 2 — respuestas fuera de orden**: el efecto que consulta `/api/facturas` usa un flag
+  `vigente` en el cleanup para descartar la respuesta de una consulta ya superada. El listado
+  tarda ~1 s contra Azure SQL; al cambiar dos filtros seguidos las peticiones se solapan y la
+  vieja puede llegar de última y **pisar el resultado del filtro nuevo**, dejando la tabla con
+  datos que no corresponden a lo filtrado. Pasó de verdad (lo destapó
+  `probar_ui_tipos_fechas.py`) y el mismo arreglo está en `NotasCredito.jsx`. Cualquier
+  listado nuevo con filtros debe copiarlo.
 - La **casilla de selección** de la 1ª columna solo se pinta para quien tiene el permiso
   `aprobar`; ojo con las pruebas de UI que indexan columnas por `nth-child` (se corrió una).
   La selección se limpia al cambiar de filtro o página (las filas marcadas ya no están a la

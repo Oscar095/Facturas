@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field
 
 
 class Token(BaseModel):
@@ -100,6 +100,15 @@ class DocumentoOut(BaseModel):
     fecha: datetime
 
 
+class ObservacionOut(BaseModel):
+    """Una nota del historial (append-only): quién la escribió y cuándo."""
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    texto: str
+    fecha: datetime
+    usuario: UsuarioOut | None = None
+
+
 class FirmaOut(BaseModel):
     """Firma del usuario logeado (nunca expone blob_path ni firmas ajenas)."""
     model_config = ConfigDict(from_attributes=True)
@@ -138,20 +147,35 @@ class FacturaResumen(BaseModel):
     numero: str
     proveedor: ProveedorOut
     valor_total: Decimal | None  # siempre en COP (convertido con TRM si moneda=USD)
-    iva: Decimal | None = None   # también en COP
+    # iva en COP. None = no se pudo determinar (el portal no lo entrega y el PDF
+    # no permitió deducirlo); en ese caso el subtotal AÚN INCLUYE IVA y la UI lo
+    # marca, para no presentar como "sin IVA" un valor que sí lo trae.
+    iva: Decimal | None = None
     fecha_emision: datetime | None
     fecha_recepcion: datetime | None
     fecha_vencimiento: datetime | None = None
     estado_proceso: str
     tipo_orden: str | None
     tipo_documento: str = "FACTURA"
-    observaciones: str | None = None  # nota de quien carga los docs para el aprobador
+    observaciones: list[ObservacionOut] = []  # historial de notas para el aprobador
     origen: str = "portal"  # portal | manual
     moneda: str = "COP"
     trm: Decimal | None = None
     valor_original: Decimal | None = None  # valor en la moneda original (USD)
     area: AreaOut | None
     responsable: UsuarioOut | None
+
+    @computed_field
+    @property
+    def subtotal(self) -> Decimal | None:
+        """Valor SIN IVA — la cifra con la que el negocio hace seguimiento.
+
+        Con `iva` desconocido devuelve el total tal cual; quien lo consuma debe
+        mirar `iva is None` para saber que esa cifra todavía incluye impuesto.
+        """
+        if self.valor_total is None:
+            return None
+        return self.valor_total - (self.iva or Decimal(0))
 
 
 class FacturaDetalle(FacturaResumen):
@@ -171,9 +195,10 @@ class AprobarIn(BaseModel):
     firma_id: int
 
 
-class ObservacionesIn(BaseModel):
-    """Nota libre para el jefe aprobador. Cadena vacía = borrar la observación."""
-    observaciones: str | None = Field(None, max_length=2000)
+class ObservacionIn(BaseModel):
+    """Nota nueva para el jefe aprobador. El historial es append-only: no se
+    edita ni se borra, cada aporte queda como una entrada más."""
+    texto: str = Field(min_length=1, max_length=2000)
 
 
 class AprobarLoteIn(AprobarIn):

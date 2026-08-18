@@ -113,13 +113,18 @@ def dashboard(periodo: str = "mes", mes: str | None = None, meses: int = 12,
     inicio_mes, fin_mes = _rango_mes_utc(mes_sel)
     meses = max(1, min(meses, 24))
     fecha_ref = func.coalesce(Factura.fecha_recepcion, Factura.creado_en)
+    # Todo el panel mide SIN IVA: el seguimiento del negocio se hace sobre la base.
+    # Donde el IVA no se pudo determinar (facturas escaneadas, sin texto_pdf) el
+    # coalesce deja el total tal cual — se prefiere sumar de más antes que excluir
+    # la factura del análisis. Ver services/iva.py.
+    valor_sin_iva = Factura.valor_total - func.coalesce(Factura.iva, 0)
 
     # ── tarjetas del mes seleccionado ──
     q_mes = (
         select(
             Factura.estado_proceso,
             func.count(),
-            func.coalesce(func.sum(Factura.valor_total), 0),
+            func.coalesce(func.sum(valor_sin_iva), 0),
         )
         .where(fecha_ref >= inicio_mes, fecha_ref < fin_mes)
         .group_by(Factura.estado_proceso)
@@ -148,7 +153,7 @@ def dashboard(periodo: str = "mes", mes: str | None = None, meses: int = 12,
         select(
             Area.nombre,
             func.count(Factura.id),
-            func.coalesce(func.sum(Factura.valor_total), 0),
+            func.coalesce(func.sum(valor_sin_iva), 0),
             func.sum(case((Factura.estado_proceso.in_(ESTADOS_PENDIENTES), 1), else_=0)),
         )
         .select_from(Factura)
@@ -181,7 +186,7 @@ def dashboard(periodo: str = "mes", mes: str | None = None, meses: int = 12,
     inicio_ventana = _rango_mes_utc(claves_meses[0])[0]
 
     q_matriz = (
-        select(Area.nombre, fecha_ref, Factura.valor_total)
+        select(Area.nombre, fecha_ref, valor_sin_iva)
         .select_from(Factura)
         .outerjoin(Area, Factura.area_id == Area.id)
         .where(fecha_ref >= inicio_ventana, fecha_ref < fin_mes)
@@ -240,7 +245,8 @@ def dashboard(periodo: str = "mes", mes: str | None = None, meses: int = 12,
             "numero": f.numero,
             "proveedor": f.proveedor.razon_social if f.proveedor else "—",
             "area": f.area.nombre if f.area else None,
-            "valor_total": float(f.valor_total) if f.valor_total is not None else None,
+            # sin IVA, igual que el resto del panel
+            "valor_total": float(f.valor_total - (f.iva or 0)) if f.valor_total is not None else None,
             "fecha_recepcion": recibida.isoformat() if recibida else None,
             "dias_sin_procesar": (ahora_utc - recibida).days if recibida else None,
             "estado_proceso": f.estado_proceso,

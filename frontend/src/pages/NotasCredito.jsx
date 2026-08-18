@@ -21,6 +21,9 @@ export default function NotasCredito() {
   }, [puedeEditar]);
 
   useEffect(() => {
+    // ver el comentario de Facturas.jsx: descarta la respuesta de una consulta
+    // superada para que una petición lenta no pise el resultado del filtro nuevo
+    let vigente = true;
     setCargando(true);
     const p = new URLSearchParams();
     if (filtros.proveedor) p.set("proveedor", filtros.proveedor);
@@ -29,9 +32,12 @@ export default function NotasCredito() {
     p.set("pagina", filtros.pagina);
     api
       .get(`/api/notas-credito?${p.toString()}`)
-      .then(setData)
-      .catch(() => setData({ items: [], total: 0 }))
-      .finally(() => setCargando(false));
+      .then((d) => vigente && setData(d))
+      .catch(() => vigente && setData({ items: [], total: 0 }))
+      .finally(() => vigente && setCargando(false));
+    return () => {
+      vigente = false;
+    };
   }, [filtros]);
 
   function set(campo, valor) {

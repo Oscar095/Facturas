@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, getToken } from "../api";
 import { useAuth } from "../auth.jsx";
-import { badgeEstado, formatoFecha, formatoPesos, tienePermiso } from "../util";
+import { badgeEstado, formatoFecha, formatoFechaHora, formatoPesos, tienePermiso } from "../util";
 
 const TIPOS_CARGA = [
   { valor: "OCN", texto: "Orden de Compra (OCN)" },
@@ -35,20 +35,20 @@ export default function FacturaDetalle() {
     if (puedeEditar) api.get("/api/areas").then(setAreas).catch(() => setAreas([]));
   }, [puedeEditar]);
 
-  // ── observaciones para el jefe aprobador ──
-  // Se sincroniza solo al cambiar de factura (no en cada refresco del objeto),
-  // para no pisar lo que el usuario está escribiendo cuando otra acción
-  // (subir un documento, procesar…) devuelve la factura actualizada.
-  const [obs, setObs] = useState("");
+  // ── historial de observaciones para el jefe aprobador ──
+  // Append-only: cada nota queda con su autor y fecha. El textarea es solo para
+  // la nota NUEVA; nunca se edita ni se borra lo ya escrito.
+  const [nuevaObs, setNuevaObs] = useState("");
   const [guardandoObs, setGuardandoObs] = useState(false);
-  useEffect(() => setObs(factura?.observaciones || ""), [factura?.id]);
-  const obsSinGuardar = !!factura && obs !== (factura.observaciones || "");
 
-  async function guardarObservaciones() {
+  async function agregarObservacion() {
+    const texto = nuevaObs.trim();
+    if (!texto) return;
     setGuardandoObs(true);
     setError("");
     try {
-      setFactura(await api.put(`/api/facturas/${id}/observaciones`, { observaciones: obs }));
+      setFactura(await api.post(`/api/facturas/${id}/observaciones`, { texto }));
+      setNuevaObs("");
     } catch (err) {
       setError(err.message);
     } finally {
@@ -180,7 +180,27 @@ export default function FacturaDetalle() {
 
       <div className="detalle-datos">
         <div>
-          <span className="etiqueta">Valor</span>
+          <span className="etiqueta">Valor sin IVA</span>
+          <span className="valor">
+            {formatoPesos(factura.subtotal)}
+            {factura.iva == null && (
+              <span
+                className="iva-desconocido"
+                title="No se pudo determinar el IVA de esta factura: el valor mostrado todavía lo incluye."
+              >
+                *
+              </span>
+            )}
+          </span>
+        </div>
+        <div>
+          <span className="etiqueta">IVA</span>
+          <span className="valor">
+            {factura.iva == null ? "no discriminado" : formatoPesos(factura.iva)}
+          </span>
+        </div>
+        <div>
+          <span className="etiqueta">Total con IVA</span>
           <span className="valor">{formatoPesos(factura.valor_total)}</span>
         </div>
         {factura.moneda === "USD" && (
@@ -238,34 +258,6 @@ export default function FacturaDetalle() {
       </div>
 
       {error && <div className="error">{error}</div>}
-
-      <div className="observaciones">
-        <div className="observaciones-cabecera">
-          <h3>Observaciones para el aprobador</h3>
-          {obsSinGuardar && <span className="sin-guardar">sin guardar</span>}
-        </div>
-        <p className="ayuda">
-          Información relevante que el jefe debe tener en cuenta al aprobar
-          (por qué falta un documento, a qué proyecto corresponde, etc.).
-        </p>
-        <textarea
-          value={obs}
-          maxLength={2000}
-          rows={3}
-          placeholder="Escribe aquí una nota para quien aprueba esta factura…"
-          onChange={(e) => setObs(e.target.value)}
-        />
-        <div className="observaciones-acciones">
-          <button className="btn" onClick={guardarObservaciones} disabled={guardandoObs || !obsSinGuardar}>
-            {guardandoObs ? "Guardando…" : "Guardar observaciones"}
-          </button>
-          {obsSinGuardar && (
-            <button className="btn-sec" onClick={() => setObs(factura.observaciones || "")}>
-              Descartar cambios
-            </button>
-          )}
-        </div>
-      </div>
 
       {factura.faltantes?.length > 0 &&
         !["procesada", "aprobada", "contabilizada"].includes(factura.estado_proceso) && (
@@ -383,6 +375,48 @@ export default function FacturaDetalle() {
             ✓ Marcar como contabilizada
           </button>
         )}
+      </div>
+
+      <h2>Observaciones</h2>
+      <div className="observaciones">
+        <p className="ayuda">
+          Historial de notas para quien aprueba (por qué falta un documento, a qué
+          proyecto corresponde…). Cada nota queda registrada con su autor y su
+          fecha: se agregan, no se editan ni se borran.
+        </p>
+
+        {factura.observaciones?.length > 0 ? (
+          <ul className="obs-historial">
+            {factura.observaciones.map((o) => (
+              <li key={o.id}>
+                <div className="obs-meta">
+                  <b>{o.usuario?.nombre || "—"}</b>
+                  <span>{formatoFechaHora(o.fecha)}</span>
+                </div>
+                <div className="obs-texto">{o.texto}</div>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="ayuda obs-vacio">Todavía no hay observaciones.</p>
+        )}
+
+        <textarea
+          value={nuevaObs}
+          maxLength={2000}
+          rows={3}
+          placeholder="Escribe una observación para quien aprueba esta factura…"
+          onChange={(e) => setNuevaObs(e.target.value)}
+        />
+        <div className="observaciones-acciones">
+          <button
+            className="btn"
+            onClick={agregarObservacion}
+            disabled={guardandoObs || !nuevaObs.trim()}
+          >
+            {guardandoObs ? "Agregando…" : "Agregar observación"}
+          </button>
+        </div>
       </div>
     </div>
   );

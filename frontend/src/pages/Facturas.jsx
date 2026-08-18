@@ -7,12 +7,10 @@ import {
   ESTADOS, TIPOS_FACTURA,
 } from "../util";
 
-// Estados desde los que el jefe todavía puede aprobar (las ya aprobadas o
-// contabilizadas no se pueden seleccionar).
-const APROBABLES = ["asignada", "docs_pendientes", "lista_contabilizar", "procesada"];
-
+// Solo se puede aprobar en bloque lo que YA fue procesado: procesar sigue
+// siendo un paso humano del detalle (revisar los documentos uno por uno).
 function esAprobable(f) {
-  return !!f.area && APROBABLES.includes(f.estado_proceso);
+  return !!f.area && f.estado_proceso === "procesada";
 }
 
 export default function Facturas() {
@@ -50,6 +48,11 @@ export default function Facturas() {
   }, []);
 
   useEffect(() => {
+    // `vigente` descarta la respuesta de una consulta ya superada: el listado
+    // tarda ~1 s contra Azure SQL, así que al cambiar dos filtros seguidos las
+    // peticiones se solapan y la vieja puede llegar de última y pisar a la
+    // nueva — dejando la tabla mostrando resultados que no son del filtro.
+    let vigente = true;
     setCargando(true);
     const p = new URLSearchParams();
     if (filtros.estado) p.set("estado", filtros.estado);
@@ -62,31 +65,37 @@ export default function Facturas() {
     p.set("pagina", filtros.pagina);
     api
       .get(`/api/facturas?${p.toString()}`)
-      .then(setData)
-      .catch(() => setData({ items: [], total: 0 }))
-      .finally(() => setCargando(false));
+      .then((d) => vigente && setData(d))
+      .catch(() => vigente && setData({ items: [], total: 0 }))
+      .finally(() => vigente && setCargando(false));
+    return () => {
+      vigente = false;
+    };
   }, [filtros, refresco]);
 
-  // Se actualiza con la forma funcional (recibe los params vigentes) y no con
-  // el `qs` de este render: dos filtros cambiados muy seguido —o dos campos de
-  // un rango de fechas— usarían una copia vieja y el segundo borraría al primero.
+  // Se parte SIEMPRE de la URL viva (window.location), no del `params` de este
+  // render ni de la forma funcional de setParams: React Router le pasa al
+  // updater los params del closure del render actual, así que dos cambios
+  // seguidos antes de re-renderizar (los dos campos de un rango de fechas, o
+  // un select seguido de un input) hacen que el segundo borre al primero.
+  // navigate() actualiza window.location de forma síncrona, así que esta
+  // lectura sí ve el cambio anterior.
+  function cambiar(mutar) {
+    const p = new URLSearchParams(window.location.search);
+    mutar(p);
+    setParams(p, { replace: true });
+  }
+
   function set(campo, valor) {
-    setParams((previos) => {
-      const p = new URLSearchParams(previos);
+    cambiar((p) => {
       if (valor === "" || valor === false || valor == null) p.delete(campo);
       else p.set(campo, String(valor));
       p.delete("pagina"); // cambiar un filtro vuelve a la primera página
-      return p;
-    }, { replace: true });
+    });
   }
 
   function irPagina(n) {
-    setParams((previos) => {
-      const p = new URLSearchParams(previos);
-      if (n <= 1) p.delete("pagina");
-      else p.set("pagina", String(n));
-      return p;
-    }, { replace: true });
+    cambiar((p) => (n <= 1 ? p.delete("pagina") : p.set("pagina", String(n))));
   }
 
   // ── selección en bloque ──
@@ -138,8 +147,7 @@ export default function Facturas() {
     const ids = [...seleccion];
     const mensaje =
       `Vas a aprobar y firmar ${ids.length} factura(s) con tu firma.\n\n` +
-      "Las que aún no estén procesadas se procesarán en el mismo paso: al " +
-      "seleccionarlas declaras que sus documentos son suficientes.\n\n¿Continuar?";
+      "Tu firma se estampará en todas las páginas de todos sus documentos PDF.\n\n¿Continuar?";
     if (!confirm(mensaje)) return;
     setAprobando(true);
     setError("");
@@ -255,7 +263,7 @@ export default function Facturas() {
       {puedeAprobar && seleccion.size > 0 && (
         <div className="barra-lote">
           <span>
-            <b>{seleccion.size}</b> factura(s) seleccionada(s)
+            <b>{seleccion.size}</b> factura(s) procesada(s) seleccionada(s)
           </span>
           {!panelLote ? (
             <button className="btn exito" onClick={abrirPanelLote}>
@@ -300,7 +308,7 @@ export default function Facturas() {
                 <th className="col-check">
                   <input
                     type="checkbox"
-                    title="Seleccionar todas las facturas aprobables de esta página"
+                    title="Seleccionar todas las facturas procesadas de esta página"
                     checked={todasMarcadas}
                     disabled={aprobables.length === 0}
                     onChange={alternarTodas}
@@ -310,7 +318,7 @@ export default function Facturas() {
               <th>Folio</th>
               <th>Tipo</th>
               <th>Proveedor</th>
-              <th className="der">Valor</th>
+              <th className="der">Valor sin IVA</th>
               <th>Emisión</th>
               <th>Vence</th>
               <th>Cargada</th>
@@ -353,9 +361,9 @@ export default function Facturas() {
                           title={
                             esAprobable(f)
                               ? "Seleccionar para aprobar en bloque"
-                              : f.area
-                                ? `No se puede aprobar: ya está ${f.estado_proceso}`
-                                : "No se puede aprobar: sin área asignada"
+                              : !f.area
+                                ? "No se puede aprobar: sin área asignada"
+                                : `Solo se aprueban facturas procesadas (está ${f.estado_proceso})`
                           }
                           onChange={() => alternar(f.id)}
                         />
@@ -363,9 +371,12 @@ export default function Facturas() {
                     )}
                     <td className="mono">
                       {f.numero}
-                      {f.observaciones && (
-                        <span className="marca-obs" title={f.observaciones}>
-                          💬
+                      {f.observaciones?.length > 0 && (
+                        <span
+                          className="marca-obs"
+                          title={f.observaciones.map((o) => o.texto).join("\n\n")}
+                        >
+                          💬{f.observaciones.length > 1 && f.observaciones.length}
                         </span>
                       )}
                     </td>
@@ -376,7 +387,17 @@ export default function Facturas() {
                       <div className="prov">{f.proveedor.razon_social}</div>
                       <div className="prov-nit">{f.proveedor.nit}</div>
                     </td>
-                    <td className="der mono">{formatoPesos(f.valor_total)}</td>
+                    <td className="der mono">
+                      {formatoPesos(f.subtotal)}
+                      {f.iva == null && (
+                        <span
+                          className="iva-desconocido"
+                          title="No se pudo determinar el IVA de esta factura: el valor mostrado todavía lo incluye."
+                        >
+                          *
+                        </span>
+                      )}
+                    </td>
                     <td>{formatoFecha(f.fecha_emision)}</td>
                     <td>{formatoFecha(f.fecha_vencimiento)}</td>
                     <td>{formatoFecha(f.fecha_recepcion)}</td>

@@ -1,13 +1,18 @@
 """Prueba de los dos cambios de backend sobre facturas SINTÉTICAS:
 
-  A) facturas.observaciones — nota para el jefe aprobador: se guarda, se borra,
-     viaja en el detalle y en el listado, y queda auditada como evento.
+  A) Historial de observaciones (tabla observaciones, append-only): cada nota
+     queda con su autor y su fecha, se acumulan en orden y viajan tanto en el
+     detalle como en el listado.
   B) POST /api/facturas/aprobar-lote — aprobar y firmar varias de una vez:
-     procesa sobre la marcha las que aún no lo estaban, omite (sin abortar) las
-     que no se pueden aprobar y detalla el motivo de cada una.
+     SOLO facturas ya procesadas; omite (sin abortar) las demás detallando el
+     motivo de cada una.
 
 Crea su propia firma de prueba y limpia facturas, blobs, eventos y firma al final.
-Uso: .venv/Scripts/python.exe scripts/probar_observaciones_lote_api.py
+Funciona igual contra local y contra el App Service (la BD y el Blob son los
+mismos), pasando la URL como argumento.
+
+Uso: .venv/Scripts/python.exe scripts/probar_observaciones_lote_api.py [URL]
+     ... scripts/probar_observaciones_lote_api.py https://facturacion.azurewebsites.net
 """
 import sys
 
@@ -21,10 +26,12 @@ from reportlab.pdfgen import canvas as rl_canvas  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 
 from app.database import SessionLocal  # noqa: E402
-from app.models import Area, Documento, Evento, Factura, Proveedor, ahora  # noqa: E402
+from app.models import (  # noqa: E402
+    Area, Documento, Evento, Factura, Observacion, Proveedor, ahora,
+)
 from app.services.blob_storage import get_almacen  # noqa: E402
 
-BASE = "http://127.0.0.1:8000"
+BASE = sys.argv[1].rstrip("/") if len(sys.argv) > 1 else "http://127.0.0.1:8000"
 almacen = get_almacen()
 
 img = Image.new("RGBA", (400, 140), (0, 0, 0, 0))
@@ -49,10 +56,11 @@ prov = db.execute(select(Proveedor)).scalars().first()
 area = db.execute(select(Area)).scalars().first()
 
 CASOS = [
-    ("LOTE-1", "lista_contabilizar", True),   # se procesa y se firma
-    ("LOTE-2", "procesada", True),            # ya procesada: solo se firma
-    ("LOTE-3", "lista_contabilizar", False),  # sin área -> omitida
+    ("LOTE-1", "procesada", True),            # se firma
+    ("LOTE-2", "procesada", True),            # se firma
+    ("LOTE-3", "procesada", False),           # sin área -> omitida
     ("LOTE-4", "aprobada", True),             # ya aprobada -> omitida
+    ("LOTE-5", "lista_contabilizar", True),   # aún no procesada -> omitida
 ]
 ids: dict[str, int] = {}
 for numero, estado, con_area in CASOS:
@@ -69,48 +77,54 @@ db.commit()
 db.close()
 print(f"facturas sintéticas: {ids}")
 
-c = httpx.Client(base_url=BASE, timeout=120)
+print(f"probando contra {BASE}")
+c = httpx.Client(base_url=BASE, timeout=180, follow_redirects=True)
 r = c.post("/api/auth/login",
            data={"username": "oscar.orozco03@gmail.com", "password": "Admin1234*"})
 c.headers["Authorization"] = f"Bearer {r.json()['access_token']}"
 
 firma_id = None
 try:
-    # ═══ A) observaciones ═══
+    # ═══ A) historial de observaciones ═══
     fid = ids["LOTE-1"]
-    NOTA = "El CRN llega la próxima semana; el proveedor ya despachó."
+    NOTA1 = "El CRN llega la próxima semana; el proveedor ya despachó."
+    NOTA2 = "Confirmado con compras: la OCS cubre el servicio completo."
 
-    r = c.put(f"/api/facturas/{fid}/observaciones", json={"observaciones": NOTA})
+    r = c.post(f"/api/facturas/{fid}/observaciones", json={"texto": NOTA1})
     assert r.status_code == 200, r.text
-    assert r.json()["observaciones"] == NOTA, r.json()
-    print("A1) PUT observaciones guarda y devuelve el detalle: OK")
+    assert [o["texto"] for o in r.json()["observaciones"]] == [NOTA1], r.json()
+    print("A1) POST agrega la primera nota y la devuelve en el detalle: OK")
+
+    r = c.post(f"/api/facturas/{fid}/observaciones", json={"texto": NOTA2})
+    assert [o["texto"] for o in r.json()["observaciones"]] == [NOTA1, NOTA2], r.json()
+    print("A2) la segunda nota se ACUMULA (no reemplaza) y queda en orden: OK")
 
     r = c.get(f"/api/facturas/{fid}")
-    assert r.json()["observaciones"] == NOTA
-    print("A2) el detalle la conserva: OK")
+    obs = r.json()["observaciones"]
+    assert len(obs) == 2 and obs[0]["usuario"]["nombre"], obs
+    assert obs[0]["fecha"] and obs[0]["id"] != obs[1]["id"]
+    print("A3) cada nota trae autor y fecha: OK")
 
-    # el listado también la trae: el jefe la ve al aprobar en bloque sin entrar
+    # el listado también las trae: el jefe las ve al aprobar en bloque sin entrar
     r = c.get("/api/facturas?proveedor=" + prov.nit)
     fila = next(x for x in r.json()["items"] if x["id"] == fid)
-    assert fila["observaciones"] == NOTA, fila
-    print("A3) el listado la incluye (indicador para aprobar en bloque): OK")
+    assert [o["texto"] for o in fila["observaciones"]] == [NOTA1, NOTA2], fila
+    print("A4) el listado incluye el historial (indicador para el aprobador): OK")
 
     db2 = SessionLocal()
     evs = db2.execute(select(Evento).where(Evento.factura_id == fid,
-                                           Evento.accion == "observaciones")).scalars().all()
-    assert len(evs) == 1 and NOTA[:20] in (evs[0].detalle or ""), evs
+                                           Evento.accion == "observacion")).scalars().all()
+    assert len(evs) == 2, evs
     db2.close()
-    print("A4) queda auditada como evento 'observaciones': OK")
+    print("A5) cada nota queda auditada en eventos: OK")
 
-    r = c.put(f"/api/facturas/{fid}/observaciones", json={"observaciones": "   "})
-    assert r.status_code == 200 and r.json()["observaciones"] is None, r.text
-    print("A5) texto en blanco borra la observación (queda NULL): OK")
-
-    r = c.put(f"/api/facturas/{fid}/observaciones", json={"observaciones": "x" * 2001})
+    r = c.post(f"/api/facturas/{fid}/observaciones", json={"texto": "   "})
     assert r.status_code == 422, r.status_code
-    print("A6) más de 2000 caracteres se rechaza (422): OK")
+    print("A6) nota vacía o en blanco se rechaza (422): OK")
 
-    c.put(f"/api/facturas/{fid}/observaciones", json={"observaciones": NOTA})
+    r = c.post(f"/api/facturas/{fid}/observaciones", json={"texto": "x" * 2001})
+    assert r.status_code == 422, r.status_code
+    print("A7) más de 2000 caracteres se rechaza (422): OK")
 
     # ═══ B) aprobación por lote ═══
     r = c.post("/api/firmas", files={"archivo": ("firma_lote.png", PNG_FIRMA, "image/png")},
@@ -133,9 +147,9 @@ try:
     assert r.status_code == 200, r.text
     res = r.json()
     por_id = {x["factura_id"]: x for x in res["resultados"]}
-    assert res["aprobadas"] == 2 and res["omitidas"] == 2 and res["errores"] == 0, res
-    assert len(res["resultados"]) == 4, "los ids duplicados no se deduplicaron"
-    print(f"B3) 2 aprobadas / 2 omitidas / 0 errores (ids duplicados ignorados): OK")
+    assert res["aprobadas"] == 2 and res["omitidas"] == 3 and res["errores"] == 0, res
+    assert len(res["resultados"]) == 5, "los ids duplicados no se deduplicaron"
+    print("B3) 2 aprobadas / 3 omitidas / 0 errores (ids duplicados ignorados): OK")
 
     assert por_id[ids["LOTE-1"]]["estado"] == "aprobada"
     assert por_id[ids["LOTE-2"]]["estado"] == "aprobada"
@@ -143,12 +157,17 @@ try:
     assert "área" in por_id[ids["LOTE-3"]]["detalle"], por_id[ids["LOTE-3"]]
     assert por_id[ids["LOTE-4"]]["estado"] == "omitida"
     assert "aprobada" in por_id[ids["LOTE-4"]]["detalle"], por_id[ids["LOTE-4"]]
-    print("B4) motivos correctos por factura (sin área / ya aprobada): OK")
+    assert por_id[ids["LOTE-5"]]["estado"] == "omitida"
+    assert "procesada" in por_id[ids["LOTE-5"]]["detalle"], por_id[ids["LOTE-5"]]
+    print("B4) motivos por factura (sin área / ya aprobada / aún no procesada): OK")
 
     db3 = SessionLocal()
     f1 = db3.get(Factura, ids["LOTE-1"])
     f3 = db3.get(Factura, ids["LOTE-3"])
-    assert f1.estado_proceso == "aprobada" and f3.estado_proceso == "lista_contabilizar"
+    f5 = db3.get(Factura, ids["LOTE-5"])
+    assert f1.estado_proceso == "aprobada" and f3.estado_proceso == "procesada"
+    assert f5.estado_proceso == "lista_contabilizar", (
+        "el lote NO debe procesar por su cuenta lo que no estaba procesado")
     assert f1.blob_pdf == "prueba_lote/LOTE-1_firmado.pdf", f1.blob_pdf
     doc1 = db3.execute(select(Documento).where(
         Documento.factura_id == ids["LOTE-1"])).scalars().first()
@@ -164,26 +183,23 @@ try:
 
     acciones = [e.accion for e in db3.execute(select(Evento).where(
         Evento.factura_id == ids["LOTE-1"])).scalars()]
-    assert "procesada" in acciones and "aprobada" in acciones, acciones
+    assert "aprobada" in acciones and "procesada" not in acciones, acciones
     ev_ap = db3.execute(select(Evento).where(
         Evento.factura_id == ids["LOTE-1"], Evento.accion == "aprobada")).scalars().first()
     assert "lote" in ev_ap.detalle, ev_ap.detalle
-    # LOTE-2 ya venía procesada: no debe registrar un segundo 'procesada'
-    acciones2 = [e.accion for e in db3.execute(select(Evento).where(
-        Evento.factura_id == ids["LOTE-2"])).scalars()]
-    assert acciones2.count("procesada") == 0, acciones2
     db3.close()
-    print("B7) auditoría: 'procesada' solo donde hizo falta + 'aprobada … por lote': OK")
+    print("B7) auditoría: 'aprobada … por lote', sin procesar nada por su cuenta: OK")
 
     # reintentar el mismo lote no hace nada (todas ya aprobadas u omitidas)
     r = c.post("/api/facturas/aprobar-lote", json={"ids": todas, "firma_id": firma_id})
-    assert r.json()["aprobadas"] == 0 and r.json()["omitidas"] == 4, r.json()
+    assert r.json()["aprobadas"] == 0 and r.json()["omitidas"] == 5, r.json()
     print("B8) reintentar el lote es inocuo (no vuelve a firmar): OK")
 
 finally:
     db4 = SessionLocal()
     for fid_ in ids.values():
         db4.query(Evento).filter(Evento.factura_id == fid_).delete()
+        db4.query(Observacion).filter(Observacion.factura_id == fid_).delete()
         for d in db4.query(Documento).filter(Documento.factura_id == fid_).all():
             db4.delete(d)
         obj = db4.get(Factura, fid_)

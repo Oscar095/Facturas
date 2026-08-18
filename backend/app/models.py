@@ -145,11 +145,6 @@ class Factura(Base):
     estado_portal: Mapped[str | None] = mapped_column(String(60), nullable=True)
     estado_proceso: Mapped[str] = mapped_column(String(30), default="nueva", index=True)
     tipo_orden: Mapped[str | None] = mapped_column(String(10), nullable=True)  # OCN | OCS
-    # Nota libre de quien carga los documentos para el jefe que aprueba (contexto
-    # que no se deduce de los adjuntos). La escribe cualquiera con acceso al área
-    # de la factura: NO exige el permiso editar_facturas, porque el mismo usuario
-    # que sube OCN/OCS/CRN debe poder explicarlos.
-    observaciones: Mapped[str | None] = mapped_column(Text, nullable=True)
     area_id: Mapped[int | None] = mapped_column(ForeignKey("areas.id"), nullable=True)
     responsable_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
     blob_pdf: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -169,6 +164,9 @@ class Factura(Base):
     responsable: Mapped[Usuario | None] = relationship()
     documentos: Mapped[list["Documento"]] = relationship(back_populates="factura")
     eventos: Mapped[list["Evento"]] = relationship(back_populates="factura")
+    observaciones: Mapped[list["Observacion"]] = relationship(
+        back_populates="factura", order_by="Observacion.fecha",
+    )
 
 
 class Documento(Base):
@@ -184,6 +182,26 @@ class Documento(Base):
 
     factura: Mapped[Factura] = relationship(back_populates="documentos")
     subido_por: Mapped[Usuario | None] = relationship()
+
+
+class Observacion(Base):
+    """Historial de notas para el jefe que aprueba (append-only).
+
+    Es un historial, no un campo editable: cada nota queda con su autor y su
+    fecha y nunca se modifica ni se borra — así el aprobador ve la conversación
+    completa de quien fue cargando los documentos.
+    """
+
+    __tablename__ = "observaciones"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    factura_id: Mapped[int] = mapped_column(ForeignKey("facturas.id"), index=True)
+    usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
+    texto: Mapped[str] = mapped_column(Text)
+    fecha: Mapped[datetime] = mapped_column(DateTime, default=ahora)
+
+    factura: Mapped[Factura] = relationship(back_populates="observaciones")
+    usuario: Mapped[Usuario | None] = relationship()
 
 
 class Firma(Base):

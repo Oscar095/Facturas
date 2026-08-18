@@ -287,16 +287,26 @@ a:hover { text-decoration: underline; }
 .barra-lote .btn-sec:hover { background: rgba(234, 244, 252, 0.12); color: #fff; }
 .lista-lote { margin: 8px 0 4px; padding-left: 20px; font-size: 12.5px; }
 
-/* ── observaciones para el aprobador (detalle de factura) ── */
+/* el valor mostrado es sin IVA; el asterisco marca las facturas cuyo IVA no se
+   pudo determinar (ese importe todavía lo incluye) */
+.iva-desconocido { color: var(--oro); font-weight: 700; margin-left: 2px; cursor: help; }
+
+/* ── historial de observaciones para el aprobador (detalle de factura) ── */
 .observaciones {
   background: var(--papel-alto); border: 1px solid var(--linea);
   border-left: 3px solid var(--rust); border-radius: var(--radio);
-  padding: 18px 20px; margin: 18px 0; box-shadow: var(--sombra-chica);
+  padding: 18px 20px; margin: 0 0 18px; box-shadow: var(--sombra-chica);
 }
-.observaciones-cabecera { display: flex; align-items: baseline; gap: 10px; }
-.observaciones-cabecera h3 { margin: 0; }
-.sin-guardar { color: var(--rust-osc); font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
-.observaciones .ayuda { margin: 4px 0 10px; }
+.observaciones .ayuda { margin: 0 0 14px; max-width: 70ch; }
+.obs-historial { list-style: none; margin: 0 0 16px; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.obs-historial li {
+  background: var(--papel); border: 1px solid var(--linea);
+  border-radius: var(--radio-chico); padding: 10px 14px;
+}
+.obs-meta { display: flex; gap: 10px; align-items: baseline; font-size: 12px; color: var(--tinta-sub); margin-bottom: 4px; }
+.obs-meta b { color: var(--tinta); font-size: 12.5px; }
+.obs-texto { white-space: pre-wrap; line-height: 1.45; }
+.obs-vacio { font-style: italic; }
 .observaciones textarea {
   width: 100%; padding: 10px 12px; border: 1px solid var(--linea-fuerte);
   border-radius: var(--radio-chico); background: var(--papel-alto);
