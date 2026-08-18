@@ -97,6 +97,25 @@ def extraer_iva(texto: str | None, valor_total: Decimal | None) -> Decimal | Non
     return None
 
 
+def resolver_iva(texto: str | None, valor_total: Decimal | None,
+                 pdf: bytes | None = None,
+                 usar_ia: bool = False) -> tuple[Decimal | None, bool]:
+    """Cascada completa: aritmética (gratis) y, como ÚLTIMO recurso, IA.
+
+    Devuelve (iva, uso_ia). La IA solo se consulta si `usar_ia` y los dos
+    niveles determinísticos no decidieron — el mismo criterio que la asignación
+    de área y el vencimiento: primero lo gratis, la IA nunca por defecto.
+    """
+    iva = extraer_iva(texto, valor_total)
+    if iva is not None or not usar_ia:
+        return iva, False
+
+    from . import iva_ia  # import local: solo se carga si se usa IA
+
+    iva = iva_ia.sugerir_iva(pdf, texto, valor_total)
+    return iva, iva is not None
+
+
 def subtotal(valor_total: Decimal | None, iva: Decimal | None) -> Decimal | None:
     """Valor sin IVA. Con IVA desconocido devuelve el total tal cual: el
     consumidor debe distinguirlo por `iva is None` (la UI lo marca)."""

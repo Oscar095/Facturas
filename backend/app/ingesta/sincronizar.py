@@ -29,7 +29,7 @@ from ..models import Documento, Ejecucion, Evento, Factura, NotaCredito, Proveed
 from ..services import reglas
 from ..services.blob_storage import get_almacen
 from ..services.pdf_texto import extraer_texto
-from ..services.iva import extraer_iva
+from ..services.iva import resolver_iva
 from ..services.vencimiento import resolver_vencimiento
 from .siesa_client import DocumentoPortal, SiesaClient
 
@@ -71,7 +71,8 @@ def _existe_cufe_nc(db: Session, cufe: str) -> bool:
 
 
 def _crear_factura(db: Session, doc: DocumentoPortal, siesa: SiesaClient, almacen,
-                   tipo_documento: str = "FACTURA", usar_ia_vencimiento: bool = False) -> Factura:
+                   tipo_documento: str = "FACTURA", usar_ia_vencimiento: bool = False,
+                   usar_ia_iva: bool = False) -> Factura:
     prov = _upsert_proveedor(db, doc.nit_emisor, doc.emisor)
 
     # Descargar y subir el PDF (documento FV; un Documento Equivalente lo reemplaza
@@ -88,8 +89,9 @@ def _crear_factura(db: Session, doc: DocumentoPortal, siesa: SiesaClient, almace
         texto, doc.fecha, pdf=pdf, usar_ia=usar_ia_vencimiento
     )
     # El portal solo entrega el total: el IVA se deduce del texto reconciliándolo
-    # contra ese total (services/iva.py). None = no se pudo determinar.
-    iva = extraer_iva(texto, doc.valor)
+    # contra ese total (services/iva.py) y, si eso falla, con IA como último
+    # recurso. None = no se pudo determinar (la UI lo marca).
+    iva, iva_por_ia = resolver_iva(texto, doc.valor, pdf=pdf, usar_ia=usar_ia_iva)
     factura = Factura(
         cufe=doc.cufe,
         prefijo="",
@@ -122,6 +124,9 @@ def _crear_factura(db: Session, doc: DocumentoPortal, siesa: SiesaClient, almace
     if venc_por_ia:
         db.add(Evento(factura_id=factura.id, accion="ia_vencimiento",
                       detalle=f"IA dedujo el vencimiento: {vencimiento.date()}"))
+    if iva_por_ia:
+        db.add(Evento(factura_id=factura.id, accion="ia_iva",
+                      detalle=f"IA leyó el IVA: {iva} (base {doc.valor - iva})"))
 
     reglas.asignar_area(db, factura)
     db.flush()
@@ -164,7 +169,8 @@ def _crear_nota_credito(db: Session, doc: DocumentoPortal, siesa: SiesaClient, a
 def sincronizar(db: Session, dias: int = 3,
                 fecha_desde: str | None = None, fecha_hasta: str | None = None,
                 limite: int | None = None,
-                usar_ia_vencimiento: bool = True) -> dict:
+                usar_ia_vencimiento: bool = True,
+                usar_ia_iva: bool = True) -> dict:
     """Ejecuta una corrida de ingesta. Devuelve un resumen para n8n/logs.
 
     limite: si se indica, procesa como máximo esa cantidad de facturas nuevas
@@ -172,6 +178,8 @@ def sincronizar(db: Session, dias: int = 3,
     usar_ia_vencimiento: permite que la IA (Haiku) deduzca la fecha de
     vencimiento SOLO en las facturas donde los patrones gratuitos no la
     encontraron. Pasar False para una corrida sin gasto de API.
+    usar_ia_iva: igual, pero para el IVA (services/iva_ia.py) — solo cuando la
+    reconciliación aritmética gratuita no lo determinó.
     """
     hoy = date.today()
     desde = fecha_desde or (hoy - timedelta(days=dias)).isoformat()
@@ -205,7 +213,8 @@ def sincronizar(db: Session, dias: int = 3,
                     continue
                 try:
                     f = _crear_factura(db, doc, siesa, almacen, tipo_documento="FACTURA",
-                                       usar_ia_vencimiento=usar_ia_vencimiento)
+                                       usar_ia_vencimiento=usar_ia_vencimiento,
+                                       usar_ia_iva=usar_ia_iva)
                     db.commit()
                     nuevas += 1
                     if f.area_id is None:
@@ -227,7 +236,8 @@ def sincronizar(db: Session, dias: int = 3,
                     continue
                 try:
                     f = _crear_factura(db, doc, siesa, almacen, tipo_documento="EQUIVALENTE",
-                                       usar_ia_vencimiento=usar_ia_vencimiento)
+                                       usar_ia_vencimiento=usar_ia_vencimiento,
+                                       usar_ia_iva=usar_ia_iva)
                     db.commit()
                     nuevas += 1
                     if f.area_id is None:

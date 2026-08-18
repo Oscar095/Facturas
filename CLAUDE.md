@@ -266,23 +266,50 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
   a ciegas). Por eso el IVA se deduce del `texto_pdf` con `extraer_iva()`, que **no usa IA**.
 - La clave del método es que **el total ya se conoce**, así que no hace falta entender el
   layout (que es caótico: separadores de miles en punto o en coma en el mismo universo de
-  proveedores, columnas revueltas, retenciones mezcladas). Dos niveles, ambos aritméticos:
+  proveedores, columnas revueltas, retenciones mezcladas). Tres niveles, con la IA de último:
   1. A una tarifa legal el IVA está determinado (`total * r/(1+r)`); se acepta solo si ese
      importe **aparece impreso**. Doble validación (reconcilia Y está escrito).
   2. Si el total aparece etiquetado como subtotal / base gravable / total bruto, la factura no
      lleva IVA → 0.
+  3. **IA (Haiku, `services/iva_ia.py`) — solo si `usar_ia`** y los dos niveles fallaron. Es la
+     única vía para las escaneadas (sin `texto_pdf` no hay dónde buscar) y para las de **tarifa
+     mezclada** (parte gravada, parte exenta: la tarifa global no es 19% ni 5%, así que el
+     nivel 1 nunca las ve). Manda solo el texto recortado —principio + final, porque el bloque
+     de totales va al pie— o el PDF **recortado a la primera y la última página** si viene
+     escaneado. Queda auditado como evento `ia_iva`. Cascada: `resolver_iva()`.
   Lo demás queda en NULL: **`iva IS NULL` significa "no se pudo determinar"**, y ahí el
   subtotal mostrado TODAVÍA incluye IVA — la UI lo marca con un `*` (`.iva-desconocido`).
   No "rellenar" esos NULL con 0: sería presentar como base un valor con impuesto.
-- **Gotcha — tarifas**: solo 19% y 5%. NO agregar 8% (eso es impoconsumo, no IVA) ni 16%
-  (derogada): medido sobre los PDF reales, solo sumaban coincidencias. Y se descartó un tercer
-  nivel que tomaba el importe etiquetado junto a "IVA": en las facturas de importación elegía
+- **Gotcha 1 — tarifas**: solo 19% y 5%. NO agregar 8% (eso es impoconsumo, no IVA) ni 16%
+  (derogada): medido sobre los PDF reales, solo sumaban coincidencias. Y se descartó un nivel
+  gratis que tomaba el importe etiquetado junto a "IVA": en las facturas de importación elegía
   el flete o el gravamen arancelario.
-- Cobertura real: **397/622 = 64% del total** (84% de las que tienen `texto_pdf`); las 149 sin
-  texto son las escaneadas, las mismas que no tienen vencimiento. Pruebas:
-  `scripts/probar_iva.py` (17 casos con fragmentos reales, incluidos los que DEBEN dar None).
-  Backfill idempotente: `scripts/backfill_iva.py [--aplicar]` (solo toca filas NULL, nunca
-  pisa el IVA que extrajo la IA en la carga manual). La ingesta lo llena de aquí en adelante.
+- **Gotcha 2 — la IA sí se inventa el IVA**, igual que se inventaba el vencimiento. Por eso
+  `iva_ia._aceptable()` exige TRES cosas y no debe relajarse: (a) `base + iva == total`, y el
+  total lo entrega el portal, no el modelo — en pruebas reales delató que había devuelto el
+  IVA de UN renglón de una factura de 73 millones; (b) tarifa ≤ 20%, que descarta el gravamen
+  arancelario; (c) si hay `texto_pdf`, el importe del IVA debe **aparecer impreso** — como la
+  vía gratis ya descartó que sea el de una tarifa legal, un importe que además no está escrito
+  fue calculado, no leído. En escaneadas (c) no aplica: no hay texto que confrontar.
+- **Gotcha 3 — parsear la respuesta del modelo**: `_candidatos()` devuelve las DOS lecturas de
+  cada cifra (`104200.00` puede ser 104.200 o 10.420.000) y se prueba cada combinación contra
+  el total. Elegir "la mayor" leía 104.200,00 como 10.420.000 y descartaba extracciones
+  correctas — no volver a desempatar por tamaño; que decida la aritmética.
+- **Punto ciego conocido**: un IVA de 0 con base = total cumple la suma siempre, así que ahí
+  (a) no protege. Se acepta igual porque el modelo está LEYENDO un "IVA $ 0" impreso y porque
+  el valor que ve el usuario es el mismo que si quedara sin determinar — pero es la respuesta
+  más frágil de todas.
+- Cobertura real: **64% solo con lo gratis** (84% de las que tienen `texto_pdf`) y **87% con
+  la IA** (552/634; 200 de ellas exentas). De las 82 que siguen sin determinar, 27 no tienen
+  `texto_pdf` y en las demás la respuesta del modelo no reconcilió con el total — se quedan en
+  NULL a propósito. Costo medido con `scripts/estimar_costo_ia_iva.py`: **~US$0,71/mes** (~221
+  facturas/mes llegan a la IA: 76 por texto, 144 por visión) más ~US$1 del backfill histórico,
+  una sola vez (fueron dos pasadas: la segunda recuperó 6 facturas tras corregir el parseo). Pruebas: `scripts/probar_iva.py` (17 casos de la vía gratis) y `scripts/probar_iva_ia.py`
+  (14 casos del guardarraíl, con respuestas REALES de Haiku; no llama a la API). Backfill
+  idempotente: `scripts/backfill_iva.py [--ia] [--aplicar]` (solo toca filas NULL, nunca pisa
+  el IVA que extrajo la IA en la carga manual; sin `--ia` no gasta un peso). La ingesta llena
+  el IVA de aquí en adelante, con `usar_ia_iva=True` por defecto — pasar False para una corrida
+  sin gasto.
 - **Notas crédito**: siguen mostrando su valor total. Sus 22 filas históricas no tienen `iva`
   ni `texto_pdf`, así que no hay de dónde deducirlo — si se quiere el mismo tratamiento hay
   que re-descargar sus PDF del Blob primero.
@@ -398,10 +425,10 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
   Es la base del matching de patrones — no borrar. `notas_credito.texto_pdf` existe igual pero
   **solo se llena de aquí en adelante**: las 15 notas históricas quedaron sin texto ni área
   (no se re-descargó el histórico del Blob) y se asignan a mano.
-- **IA**: 3 usos, todos con Haiku y todos como ÚLTIMO recurso después de lo gratis —
+- **IA**: 4 usos, todos con Haiku y todos como ÚLTIMO recurso después de lo gratis —
   desempate de área (`services/ia_area.py`), extracción en la carga manual
-  (`services/extraer_factura.py`, solo al pulsar el botón) y fecha de vencimiento
-  (`services/vencimiento_ia.py`). La key vive en `.env` como `API_KEY_IA_CLAUDE`.
+  (`services/extraer_factura.py`, solo al pulsar el botón), fecha de vencimiento
+  (`services/vencimiento_ia.py`) e IVA (`services/iva_ia.py`, ~US$0,71/mes). La key vive en `.env` como `API_KEY_IA_CLAUDE`.
   Gasto medido del vencimiento: **~US$1/mes** a ~815 facturas/mes (Haiku 4.5 = US$1 por millón
   de tokens de entrada, US$5 de salida; el grueso es la visión de las escaneadas). Si hace
   falta una corrida sin gasto: `sincronizar(..., usar_ia_vencimiento=False)`.
