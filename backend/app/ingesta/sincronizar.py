@@ -29,7 +29,7 @@ from ..models import Documento, Ejecucion, Evento, Factura, NotaCredito, Proveed
 from ..services import reglas
 from ..services.blob_storage import get_almacen
 from ..services.pdf_texto import extraer_texto
-from ..services.iva import resolver_iva
+from ..services.iva import resolver_iva, subtotal
 from ..services.vencimiento import resolver_vencimiento
 from .siesa_client import DocumentoPortal, SiesaClient
 
@@ -126,7 +126,7 @@ def _crear_factura(db: Session, doc: DocumentoPortal, siesa: SiesaClient, almace
                       detalle=f"IA dedujo el vencimiento: {vencimiento.date()}"))
     if iva_por_ia:
         db.add(Evento(factura_id=factura.id, accion="ia_iva",
-                      detalle=f"IA leyó el IVA: {iva} (base {doc.valor - iva})"))
+                      detalle=f"IA leyó el IVA: {iva} (base {subtotal(doc.valor, iva)})"))
 
     reglas.asignar_area(db, factura)
     db.flush()

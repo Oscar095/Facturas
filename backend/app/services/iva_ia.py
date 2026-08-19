@@ -25,7 +25,7 @@ import re
 from decimal import Decimal, InvalidOperation
 
 from ..config import settings
-from .iva import _TOLERANCIA, _numeros
+from .iva import _TOLERANCIA, _numeros, a_decimal
 
 log = logging.getLogger("iva_ia")
 
@@ -171,8 +171,9 @@ def _aceptable(base: Decimal, iva: Decimal, valor_total: Decimal,
 
 
 def sugerir_iva(pdf: bytes | None, texto: str | None,
-                valor_total: Decimal | None) -> Decimal | None:
+                valor_total) -> Decimal | None:
     """IVA de la factura según la IA, o None si no lo dice o no convence."""
+    valor_total = a_decimal(valor_total)  # la ingesta lo pasa como float
     if not disponible() or valor_total is None or valor_total <= 0:
         return None
 

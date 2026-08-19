@@ -75,8 +75,27 @@ def _cerca(valores: set[Decimal], objetivo: Decimal) -> bool:
     return any(abs(v - objetivo) <= _TOLERANCIA for v in valores)
 
 
-def extraer_iva(texto: str | None, valor_total: Decimal | None) -> Decimal | None:
+def a_decimal(valor) -> Decimal | None:
+    """Normaliza el total a Decimal.
+
+    Imprescindible: la BD entrega `valor_total` como Decimal, pero la INGESTA lo
+    pasa como float (`_a_float` en siesa_client), y mezclar float con Decimal
+    revienta con TypeError. Se convierte vía str para no arrastrar el error
+    binario del float.
+    """
+    if valor is None:
+        return None
+    if isinstance(valor, Decimal):
+        return valor
+    try:
+        return Decimal(str(valor))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def extraer_iva(texto: str | None, valor_total) -> Decimal | None:
     """IVA de la factura en COP, o None si no se puede determinar con certeza."""
+    valor_total = a_decimal(valor_total)
     if not texto or valor_total is None or valor_total <= 0:
         return None
 
@@ -97,7 +116,7 @@ def extraer_iva(texto: str | None, valor_total: Decimal | None) -> Decimal | Non
     return None
 
 
-def resolver_iva(texto: str | None, valor_total: Decimal | None,
+def resolver_iva(texto: str | None, valor_total,
                  pdf: bytes | None = None,
                  usar_ia: bool = False) -> tuple[Decimal | None, bool]:
     """Cascada completa: aritmética (gratis) y, como ÚLTIMO recurso, IA.
@@ -106,6 +125,7 @@ def resolver_iva(texto: str | None, valor_total: Decimal | None,
     niveles determinísticos no decidieron — el mismo criterio que la asignación
     de área y el vencimiento: primero lo gratis, la IA nunca por defecto.
     """
+    valor_total = a_decimal(valor_total)
     iva = extraer_iva(texto, valor_total)
     if iva is not None or not usar_ia:
         return iva, False
@@ -116,9 +136,10 @@ def resolver_iva(texto: str | None, valor_total: Decimal | None,
     return iva, iva is not None
 
 
-def subtotal(valor_total: Decimal | None, iva: Decimal | None) -> Decimal | None:
+def subtotal(valor_total, iva: Decimal | None) -> Decimal | None:
     """Valor sin IVA. Con IVA desconocido devuelve el total tal cual: el
     consumidor debe distinguirlo por `iva is None` (la UI lo marca)."""
+    valor_total = a_decimal(valor_total)
     if valor_total is None:
         return None
     return valor_total - (iva or Decimal(0))

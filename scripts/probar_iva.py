@@ -1,5 +1,7 @@
 """Prueba unitaria del extractor de IVA con fragmentos REALES de los PDF de la
-BD (un caso por formato problemático observado). No toca la base de datos."""
+BD (un caso por formato problemático observado) y con el total en sus dos tipos:
+Decimal (como lo devuelve la BD) y float (como lo entrega la ingesta del portal).
+No toca la base de datos."""
 import sys
 
 sys.path.insert(0, "backend")
@@ -57,6 +59,13 @@ CASOS = [
     (None, D("1190000.00"), None),
     ("", D("1190000.00"), None),
     ("Subtotal 0 Total 0", D("0"), None),  # total cero: nada que repartir
+
+    # ── REGRESIÓN: el portal entrega el total como float, no como Decimal ──
+    # Mezclarlos reventaba con TypeError y tumbó 2 facturas de una corrida real
+    # (ejecución #86). La BD sí devuelve Decimal, por eso el backfill no lo vio.
+    ("SUBTOTAL: VALOR I.V.A: TOTAL: 684,000 129,960 813,960", 813960.0, D("129960.00")),
+    ("Total Bruto 1,530,000.00 Total a Pagar 1,530,000.00", 1530000.0, D("0.00")),
+    ("Subtotal 1.785.000,00 Iva 19% 339.150,00", 2124150.0, D("339150.00")),
 ]
 
 fallos = 0
