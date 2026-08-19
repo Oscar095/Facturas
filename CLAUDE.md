@@ -291,7 +291,15 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
   arancelario; (c) si hay `texto_pdf`, el importe del IVA debe **aparecer impreso** — como la
   vía gratis ya descartó que sea el de una tarifa legal, un importe que además no está escrito
   fue calculado, no leído. En escaneadas (c) no aplica: no hay texto que confrontar.
-- **Gotcha 3 — parsear la respuesta del modelo**: `_candidatos()` devuelve las DOS lecturas de
+- **Gotcha 3 — el total llega como float desde la ingesta**: `siesa_client._a_float()` entrega
+  `doc.valor` como float, pero la BD devuelve `valor_total` como `Decimal`, y mezclarlos revienta
+  con `TypeError: unsupported operand type(s) for *`. Tumbó 2 facturas de una corrida real
+  (ejecución #86) y **el backfill no lo detectó porque ahí los datos vienen de la BD**: la ruta
+  de la ingesta era la única rota. Por eso `iva.a_decimal()` normaliza el total en
+  `extraer_iva`, `resolver_iva`, `subtotal` y `sugerir_iva`. Al probar cualquier cosa que
+  consuma `valor_total`, incluir un caso con el total como float — las pruebas que solo usan
+  Decimal dan verde y no ven nada.
+- **Gotcha 4 — parsear la respuesta del modelo**: `_candidatos()` devuelve las DOS lecturas de
   cada cifra (`104200.00` puede ser 104.200 o 10.420.000) y se prueba cada combinación contra
   el total. Elegir "la mayor" leía 104.200,00 como 10.420.000 y descartaba extracciones
   correctas — no volver a desempatar por tamaño; que decida la aritmética.
@@ -407,10 +415,12 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
   actualización a "Siesa E - Invoicing v3.1.0.17": (a) la contraseña dejó de ser válida — el
   usuario la restableció y actualizó `PASSWORD_FACTURAS` en `.env`; (b) `_login()` esperaba una
   navegación que en v3.1 ya no ocurre (ver gotcha 5). Con ambos arreglados la ingesta real
-  corre de nuevo (verificado: 3 facturas nuevas, 0 errores). **Pendiente del usuario**:
-  actualizar también `PASSWORD_FACTURAS` en los **App Settings del App Service**, o el robot
-  de n8n seguirá fallando en la nube. El `#token_input` oculto + "VALIDAR TOKEN" del formulario
-  NO se activó con credenciales válidas (no hay 2FA que manejar).
+  corre de nuevo. El `#token_input` oculto + "VALIDAR TOKEN" del formulario NO se activó con
+  credenciales válidas (no hay 2FA que manejar). La clave en los **App Settings del App
+  Service** también quedó al día: verificado el 2026-08-18 en la tabla `ejecuciones` (corridas
+  `ok` los días 16, 17 y 18 a las 10:00 y 20:00, que es el cron de n8n). Antes de dar por
+  pendiente algo del robot, **mirar `ejecuciones`** — esta nota estuvo desactualizada y llevó a
+  repetirle al usuario un pendiente que ya no existía.
 - **Scripts locales sin versionar** (herramientas de diagnóstico, misma máquina):
   `scripts/diagnosticar_login.py` (reproduce el login con screenshots/toasts/errores HTTP) y
   `scripts/ver_ultimo_log.py` (últimas 4 filas de `ejecuciones` con desglose de contadores).
