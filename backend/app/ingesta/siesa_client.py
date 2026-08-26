@@ -2,10 +2,12 @@
 
 Estrategia (validada contra el portal real):
   1. Login con Playwright (SPA Angular).
-  2. Listado: al hacer la primera búsqueda en la UI capturamos el request
-     `pst/listado/recepcion-proveedores` como plantilla; luego paginamos por
-     HTTP reusando la sesión del navegador (page.request), sin depender de
-     valores fijos por cuenta (userId, nit, usuarioEvento salen de la plantilla).
+  2. Listado: se maneja la UI (filtros + botón Buscar) y se leen las filas
+     **ya descifradas** desde el scope de AngularJS (`$ctrl.document.list`).
+     Antes se paginaba por HTTP contra `pst/listado/recepcion-proveedores`,
+     pero el portal migró el listado a `api/SpExecute/execute` con
+     `x-payload-encryption: true` — cuerpo y respuesta cifrados en el
+     navegador, igual que el PDF. Ver el gotcha 7 en CLAUDE.md.
   3. PDF: se filtra por CUFE, se hace clic en "Ver PDF" y se capturan los bytes
      de la respuesta `siesafe...:707/api/ConsultaCO/pdf-recepcion` (application/pdf).
 
@@ -17,14 +19,56 @@ Uso típico:
 from __future__ import annotations
 
 import time
-import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime
 
 from playwright.sync_api import Page, sync_playwright
 
-API_LISTADO_PATH = "pst/listado/recepcion-proveedores"
 PDF_URL_FRAGMENT = "pdf-recepcion"
+
+# Ancla para llegar al controlador de la pantalla de recepción desde JS. Se
+# prueban varios elementos porque la fila del listado NO existe cuando la
+# búsqueda no devuelve resultados, y ahí igual hay que poder leer el estado.
+_JS_CTRL = """
+  const anclas = ['tr[ng-repeat*="$ctrl.document.list"]', 'select#regist',
+                  'select#tipoDocRecepcion', '[uib-pagination]'];
+  let ctrl = null, sc = null;
+  for (const sel of anclas) {
+    const el = document.querySelector(sel);
+    if (!el) continue;
+    let s;
+    try { s = window.angular.element(el).scope(); } catch (e) { continue; }
+    if (s && s.$ctrl && s.$ctrl.document !== undefined) { ctrl = s.$ctrl; sc = s; break; }
+  }
+"""
+
+# Fijar los filtros por el MODELO de Angular y no tecleando en el input: los
+# inputs son de texto con datepicker propio y el valor tecleado se pierde, así
+# que la grilla se quedaba mostrando solo el día de hoy (se veían 8 documentos
+# donde había 102). `filters.fecha_desde`/`fecha_hasta` esperan objetos Date.
+_JS_FIJAR_FILTROS = "(f) => {" + _JS_CTRL + """
+  if (!ctrl || !sc) return false;
+  const aplicar = () => {
+    if (f.desde) ctrl.filters.fecha_desde = new Date(f.desde);
+    if (f.hasta) ctrl.filters.fecha_hasta = new Date(f.hasta);
+    if (f.tipo_doc !== null && f.tipo_doc !== undefined) ctrl.filters.tipoDocRecepcion = f.tipo_doc;
+    ctrl.filters.cufe = f.cufe || '';
+    ctrl.currentPage = 1;
+  };
+  try { sc.$apply(aplicar); } catch (e) { aplicar(); sc.$applyAsync(); }
+  return true;
+}"""
+
+_JS_ESTADO = "() => {" + _JS_CTRL + """
+  if (!ctrl) return null;
+  return {
+    cargando: !!ctrl.loading,
+    pagina: Number(ctrl.currentPage) || 1,
+    paginas: Number(ctrl.totalPages) || 1,
+    total: Number(ctrl.totalItems) || 0,
+    filas: (ctrl.document && ctrl.document.list) ? ctrl.document.list : [],
+  };
+}"""
 
 
 @dataclass
@@ -52,9 +96,19 @@ def _a_float(v) -> float | None:
 
 
 def _a_fecha(v) -> datetime | None:
+    # El portal pasó a entregar la fecha en ISO con 'T' ("2026-08-26T00:00:00",
+    # a veces con fracción de segundo); antes venía con espacio. Se aceptan
+    # ambas para no depender de la versión del portal.
+    if v is None:
+        return None
+    texto = str(v).strip()
+    try:
+        return datetime.fromisoformat(texto)
+    except ValueError:
+        pass
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
         try:
-            return datetime.strptime(str(v), fmt)
+            return datetime.strptime(texto, fmt)
         except (TypeError, ValueError):
             continue
     return None
@@ -70,7 +124,6 @@ class SiesaClient:
         self._browser = None
         self._context = None
         self.page: Page | None = None
-        self._plantilla_listado: dict[str, str] | None = None
 
     # ── ciclo de vida ────────────────────────────────────────────────────────
     def __enter__(self) -> "SiesaClient":
@@ -119,27 +172,50 @@ class SiesaClient:
         p.wait_for_load_state("networkidle", timeout=45000)
         time.sleep(2)
 
-    # ── plantilla del listado ─────────────────────────────────────────────────
-    def _capturar_plantilla(self, fecha_desde: str, fecha_hasta: str):
-        """Hace una búsqueda en la UI para capturar el post_data del listado.
+    # ── estado del listado (leído del scope de Angular) ───────────────────────
+    def _estado_listado(self) -> dict | None:
+        """Filas ya descifradas + paginación, directo del controlador Angular."""
+        return self.page.evaluate(_JS_ESTADO)
 
-        Devuelve un dict de parámetros que luego modificamos por página.
+    def _esperar_listado(self, pagina: int = 1, timeout: float = 90.0) -> dict:
+        """Espera a que termine la consulta y devuelve el estado del listado.
+
+        No sirve `wait_for_load_state('networkidle')`: la SPA mantiene tráfico
+        de fondo. Se espera a que `$ctrl.loading` baje y a que el controlador
+        esté en la página pedida.
         """
-        p = self.page
-        p.locator("input[placeholder*='Desde' i]").first.fill(fecha_desde.replace("-", "/"))
-        p.locator("input[placeholder*='Hasta' i]").first.fill(fecha_hasta.replace("-", "/"))
-        with p.expect_request(f"**/{API_LISTADO_PATH}", timeout=60000) as req_info:
-            p.locator("button:has-text('Buscar')").first.click()
-        post_data = req_info.value.post_data or ""
-        params = dict(urllib.parse.parse_qsl(post_data, keep_blank_values=True))
-        # normalizar fechas a rango ISO (el portal acepta el formato ISO con Z)
-        params["filters[fecha_desde]"] = f"{fecha_desde}T00:00:00.000Z"
-        params["filters[fecha_hasta]"] = f"{fecha_hasta}T23:59:59.000Z"
-        params["filters[formaPago]"] = "3"   # sin filtrar por forma de pago
-        params["itemSize"] = "100"
-        self._plantilla_listado = params
-        p.wait_for_load_state("networkidle", timeout=60000)
-        time.sleep(1)
+        limite = time.time() + timeout
+        ultimo: dict | None = None
+        while time.time() < limite:
+            estado = self._estado_listado()
+            if estado is not None:
+                ultimo = estado
+                if not estado["cargando"] and estado["pagina"] == pagina:
+                    return estado
+            time.sleep(0.5)
+        if ultimo is None:
+            raise RuntimeError(
+                "No se pudo leer el listado del portal: no se encontró el controlador "
+                "de la pantalla de recepción (¿cambió la SPA otra vez?)"
+            )
+        return ultimo
+
+    def _fijar_tamano_pagina(self, registros: str = "100"):
+        """Pone la grilla en 100 registros por página (menos vueltas de paginación)."""
+        sel = self.page.locator("select#regist").first
+        if sel.count() and sel.input_value() != registros:
+            try:
+                sel.select_option(registros)
+                time.sleep(0.3)
+            except Exception:  # noqa: BLE001 — si el portal no ofrece 100, se sigue igual
+                pass
+
+    def _limpiar_filtro_cufe(self):
+        """La descarga de PDF deja el CUFE escrito; si no se borra, el listado
+        siguiente devuelve una sola fila."""
+        caja = self.page.locator("input[placeholder*='CUFE' i]").first
+        if caja.count():
+            caja.fill("")
 
     # ── listado ────────────────────────────────────────────────────────────────
     def listar_documentos(
@@ -148,34 +224,36 @@ class SiesaClient:
         """Lista todos los documentos del rango (paginando). Fechas 'YYYY-MM-DD'.
 
         tipo_doc: 1=Factura, 91=Nota Crédito, 92=Nota Débito, 20=Doc Equivalente.
+
+        Se maneja la UI y se leen las filas del scope de Angular: el endpoint
+        del listado va cifrado y no se puede llamar por HTTP (ver el docstring
+        del módulo).
         """
-        if self._plantilla_listado is None:
-            self._capturar_plantilla(fecha_desde, fecha_hasta)
+        p = self.page
+        self._cerrar_modales()
+        self._fijar_tipo_documento(tipo_doc)
+        # el CUFE se limpia aquí mismo: si quedó del PDF anterior, el listado
+        # devolvería una sola fila
+        self._fijar_rango_fecha(datetime.fromisoformat(fecha_desde),
+                                datetime.fromisoformat(fecha_hasta),
+                                tipo_doc=tipo_doc, cufe="")
+        self._fijar_tamano_pagina()
 
-        base_url = self._url_api(API_LISTADO_PATH)
-        params = dict(self._plantilla_listado)
-        params["filters[fecha_desde]"] = f"{fecha_desde}T00:00:00.000Z"
-        params["filters[fecha_hasta]"] = f"{fecha_hasta}T23:59:59.000Z"
-        params["filters[tipoDocRecepcion]"] = tipo_doc
+        p.locator("button:has-text('Buscar')").first.click()
+        estado = self._esperar_listado(pagina=1)
 
-        docs: list[DocumentoPortal] = []
-        num_page = 1
-        while True:
-            params["numPage"] = str(num_page)
-            resp = self.page.request.post(
-                base_url,
-                form=params,
-                headers={"content-type": "application/x-www-form-urlencoded"},
-                timeout=60000,
-            )
-            data = resp.json()
-            lote = data.get("list", []) or []
-            for r in lote:
-                docs.append(self._mapear(r))
-            total_pages = int(data.get("totalPages", 1) or 1)
-            if num_page >= total_pages or not lote:
+        docs: list[DocumentoPortal] = [self._mapear(r) for r in estado["filas"]]
+        paginas = max(1, estado["paginas"])
+        for pagina in range(2, paginas + 1):
+            # el paginador de uib expone el "siguiente" como <li class="pagination-next">
+            siguiente = p.locator("li.pagination-next a").first
+            if not siguiente.count():
                 break
-            num_page += 1
+            siguiente.click()
+            estado = self._esperar_listado(pagina=pagina)
+            if estado["pagina"] != pagina:  # el portal no avanzó: no seguir en falso
+                break
+            docs += [self._mapear(r) for r in estado["filas"]]
         return docs
 
     @staticmethod
@@ -233,14 +311,24 @@ class SiesaClient:
         )
 
     # ── filtro de fecha ────────────────────────────────────────────────────────
-    def _fijar_rango_fecha(self, desde: datetime, hasta: datetime):
-        """Fija los campos Desde/Hasta de la grilla al rango dado.
+    def _fijar_rango_fecha(self, desde: datetime, hasta: datetime,
+                           tipo_doc: str | None = None, cufe: str = ""):
+        """Fija el rango de fechas (y opcionalmente tipo/CUFE) de la grilla.
 
-        El datepicker de Angular ignora un fill() simple y reinicia el campo a
-        'hoy'; por eso la grilla solo mostraba documentos del día actual y la
-        búsqueda por CUFE de un documento de otro día devolvía 0 filas. Se
-        escribe con eventos input/change para que Angular tome el valor.
+        Se escribe el MODELO de Angular, no el input: el campo es de texto con
+        datepicker propio y lo tecleado se pierde, así que la grilla se quedaba
+        en 'hoy' — se veían 8 documentos donde había 102. Si el modelo no está
+        accesible se cae al método viejo (teclear + eventos input/change).
         """
+        ok = self.page.evaluate(_JS_FIJAR_FILTROS, {
+            "desde": desde.strftime("%Y-%m-%dT00:00:00"),
+            "hasta": hasta.strftime("%Y-%m-%dT23:59:59"),
+            "tipo_doc": tipo_doc,
+            "cufe": cufe,
+        })
+        if ok:
+            return
+
         p = self.page
         for sel, valor in (("input[placeholder*='Desde' i]", desde),
                            ("input[placeholder*='Hasta' i]", hasta)):

@@ -84,6 +84,35 @@ Esto es lo más frágil del proyecto. Ya resuelto, pero entiéndelo antes de toc
 6. La sincronización es **idempotente**: dedup por CUFE (`_existe_cufe`). Reejecutar el mismo
    rango no duplica nada. Un fallo por-documento hace `rollback` de esa factura y **continúa**
    con las demás (no aborta la corrida).
+7. **El listado TAMPOCO se puede pedir por HTTP (desde 2026-08-26).** El portal lo migró de
+   `pst/listado/recepcion-proveedores` a `api/SpExecute/execute` con
+   `x-payload-encryption: true`: cuerpo y respuesta cifrados por Angular, igual que el PDF.
+   El robot se quedó 6 días trayendo 0 documentos con el error `Timeout 60000ms exceeded
+   while waiting for event "request"` — esperaba una petición que ya no existe. Ahora se
+   maneja la UI y se leen las filas **ya descifradas** del scope de AngularJS:
+   `$ctrl.document.list`, con las mismas claves de siempre (cufe, folio, valor,
+   tipoDocumentoId…). El controlador se alcanza desde varias anclas (`_JS_CTRL`) porque la
+   fila del `ng-repeat` **no existe cuando la búsqueda no devuelve nada**. La paginación va
+   por `$ctrl.currentPage`/`totalPages` haciendo clic en `li.pagination-next`, con el tamaño
+   de página en `select#regist` puesto a 100. No volver a intentar el listado por HTTP.
+8. **Los filtros se fijan por el MODELO de Angular, no tecleando** (`_JS_FIJAR_FILTROS`).
+   `filters.fecha_desde`/`fecha_hasta` esperan objetos `Date`; los inputs son de texto con
+   datepicker propio y lo tecleado se pierde, así que la grilla se quedaba en 'hoy': se veían
+   **8 documentos donde había 102**. El fallback a teclear + eventos input/change se conserva
+   por si el modelo no está accesible. Ese mismo `$apply` limpia `filters.cufe`, que si queda
+   escrito de una descarga de PDF previa deja el listado en una sola fila.
+9. **La fecha llega en ISO con 'T'** ("2026-08-26T00:00:00", a veces con fracción). Antes venía
+   con espacio; `_a_fecha` acepta ambas. Si se rompe, TODOS los documentos quedan con
+   `fecha=None` y la ingesta pierde emisión y vencimiento.
+10. **El `tipoDocumentoId` de la respuesta no siempre es el del filtro**: filtrando por
+   `tipo_doc=20` (Documento Equivalente) los documentos vuelven con `tipoDocumentoId=60`. No
+   asumir igualdad; el valor del `select#tipoDocRecepcion` sí sigue siendo 20.
+
+Para verificar SOLO el listado (sin tocar BD ni Blob) — primer sitio a mirar si la ingesta
+trae 0 documentos:
+```bash
+.venv/Scripts/python.exe scripts/probar_listado_portal.py 7
+```
 
 Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
 ```bash
