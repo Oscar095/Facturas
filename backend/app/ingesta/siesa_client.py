@@ -59,6 +59,17 @@ _JS_FIJAR_FILTROS = "(f) => {" + _JS_CTRL + """
   return true;
 }"""
 
+# Cambiar de página por el MODELO y no clicando `li.pagination-next`: cuando el
+# "siguiente" está deshabilitado, Bootstrap le pone `pointer-events: none` y el
+# clic de Playwright espera los 30s completos antes de reventar, tumbando la
+# corrida entera (pasó en la ejecución #120).
+_JS_IR_PAGINA = "(n) => {" + _JS_CTRL + """
+  if (!ctrl || !sc || typeof ctrl.getDocumentsFromSp !== 'function') return false;
+  const ir = () => { ctrl.currentPage = n; ctrl.getDocumentsFromSp(); };
+  try { sc.$apply(ir); } catch (e) { ir(); sc.$applyAsync(); }
+  return true;
+}"""
+
 _JS_ESTADO = "() => {" + _JS_CTRL + """
   if (!ctrl) return null;
   return {
@@ -127,23 +138,60 @@ class SiesaClient:
 
     # ── ciclo de vida ────────────────────────────────────────────────────────
     def __enter__(self) -> "SiesaClient":
-        self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(headless=self.headless)
-        self._context = self._browser.new_context(locale="es-CO", accept_downloads=True)
-        self.page = self._context.new_page()
-        self._login()
-        return self
+        try:
+            self._pw = sync_playwright().start()
+            self._browser = self._pw.chromium.launch(headless=self.headless)
+            self._context = self._browser.new_context(locale="es-CO", accept_downloads=True)
+            self.page = self._context.new_page()
+            self._login()
+            return self
+        except Exception:
+            # Si __enter__ falla, Python NO llama a __exit__: hay que cerrar aquí
+            # o la sesión de Playwright queda viva y deja el hilo con un loop de
+            # asyncio corriendo. La SIGUIENTE corrida que caiga en ese mismo hilo
+            # del threadpool revienta al instante con "Playwright Sync API inside
+            # the asyncio loop" — un fallo de login envenenaba las corridas
+            # posteriores (pasó: ejecución #121 tumbó a la #122).
+            self.__exit__(None, None, None)
+            raise
 
     def __exit__(self, *exc):
+        # Nunca debe lanzar: taparía el error real que provocó la salida.
         try:
             if self._browser:
                 self._browser.close()
+        except Exception:  # noqa: BLE001
+            pass
         finally:
-            if self._pw:
-                self._pw.stop()
+            self._browser = self._context = self.page = None
+            try:
+                if self._pw:
+                    self._pw.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            self._pw = None
 
     # ── login ────────────────────────────────────────────────────────────────
-    def _login(self):
+    def _login(self, intentos: int = 3):
+        """Inicia sesión, reintentando si el portal no alcanza a pintar el formulario.
+
+        El portal a veces tarda o responde una página vacía y el `fill` del
+        usuario se cae con `Timeout ... waiting for locator(input...)`. No es un
+        bloqueo: al reintentar entra. Sin reintento, una lentitud puntual deja
+        al robot sin correr hasta la siguiente franja horaria.
+        """
+        ultimo: Exception | None = None
+        for intento in range(1, intentos + 1):
+            try:
+                self._login_una_vez()
+                return
+            except Exception as e:  # noqa: BLE001
+                ultimo = e
+                if intento < intentos:
+                    time.sleep(5 * intento)
+        raise ultimo  # type: ignore[misc]
+
+    def _login_una_vez(self):
         p = self.page
         p.goto(self.url, wait_until="networkidle", timeout=60000)
         time.sleep(2)
@@ -245,11 +293,16 @@ class SiesaClient:
         docs: list[DocumentoPortal] = [self._mapear(r) for r in estado["filas"]]
         paginas = max(1, estado["paginas"])
         for pagina in range(2, paginas + 1):
-            # el paginador de uib expone el "siguiente" como <li class="pagination-next">
-            siguiente = p.locator("li.pagination-next a").first
-            if not siguiente.count():
-                break
-            siguiente.click()
+            if not p.evaluate(_JS_IR_PAGINA, pagina):
+                # sin acceso al controlador: se intenta el clic, con timeout
+                # corto para no quemar 30s si el botón está deshabilitado
+                siguiente = p.locator("li.pagination-next a").first
+                if not siguiente.count():
+                    break
+                try:
+                    siguiente.click(timeout=5000)
+                except Exception:  # noqa: BLE001 — sin "siguiente" utilizable, se acabó
+                    break
             estado = self._esperar_listado(pagina=pagina)
             if estado["pagina"] != pagina:  # el portal no avanzó: no seguir en falso
                 break

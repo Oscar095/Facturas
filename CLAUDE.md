@@ -108,6 +108,19 @@ Esto es lo más frágil del proyecto. Ya resuelto, pero entiéndelo antes de toc
    `tipo_doc=20` (Documento Equivalente) los documentos vuelven con `tipoDocumentoId=60`. No
    asumir igualdad; el valor del `select#tipoDocRecepcion` sí sigue siendo 20.
 
+11. **Si `__enter__` falla, Python NO llama a `__exit__`.** Un login lento dejaba la sesión de
+   Playwright viva y el hilo con un loop de asyncio corriendo, así que la corrida SIGUIENTE que
+   cayera en ese hilo del threadpool moría al instante con "Playwright Sync API inside the
+   asyncio loop" (la ejecución #121 tumbó a la #122). `__enter__` ahora cierra y relanza, y
+   `__exit__` no lanza nunca. Regresión: `scripts/probar_cliente_ciclo_vida.py`.
+12. **Nada de clics sobre el paginador.** Cuando el "siguiente" está deshabilitado, Bootstrap le
+   pone `pointer-events: none` y el clic de Playwright espera sus 30s completos y tumba la
+   corrida (ejecución #120). Se cambia de página por el modelo:
+   `$ctrl.currentPage = n; $ctrl.getDocumentsFromSp()`.
+13. El login **reintenta 3 veces** con espera creciente: el portal a veces no alcanza a pintar
+   el formulario y el `fill` del usuario revienta con Timeout. No es bloqueo — al reintentar
+   entra —, pero sin reintento el robot se quedaba sin correr hasta la franja siguiente.
+
 Para verificar SOLO el listado (sin tocar BD ni Blob) — primer sitio a mirar si la ingesta
 trae 0 documentos:
 ```bash

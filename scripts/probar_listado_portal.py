@@ -43,16 +43,21 @@ with SiesaClient(settings.url_facturas, settings.username_facturas,
                 print(f"   FALLO: {len(faltantes)}/{len(docs)} sin {etiqueta} "
                       f"(p. ej. {faltantes[0].folio or faltantes[0].id_portal})")
 
-        # Ojo: el id que devuelve el portal NO siempre es el del filtro — con
-        # tipo_doc=20 (Documento Equivalente) los documentos vienen con
-        # tipoDocumentoId=60. Lo que se comprueba es que el filtro se aplicó de
-        # forma consistente (un solo tipo en la respuesta), no la igualdad.
+        # Ojo: el id que devuelve el portal NO es el del filtro. Con tipo_doc=20
+        # (Documento Equivalente) los documentos vuelven con tipoDocumentoId 60
+        # y 50 — son subtipos suyos, no una mezcla. Así que no se compara por
+        # igualdad ni se exige un solo valor: se verifica que NO se hayan colado
+        # documentos de los otros tipos que sí extraemos.
+        AJENOS = {"1": {"91", "20", "50", "60"}, "91": {"1", "20", "50", "60"},
+                  "20": {"1", "91"}}
         tipos = Counter(d.tipo_documento_id for d in docs)
-        if len(tipos) != 1:
+        intrusos = set(tipos) & AJENOS.get(tipo_doc, set())
+        if intrusos:
             fallos += 1
-            print(f"   FALLO: el filtro de tipo no se aplicó, llegaron {dict(tipos)}")
+            print(f"   FALLO: el filtro dejó pasar otros tipos {intrusos} "
+                  f"(llegaron {dict(tipos)})")
         elif tipo_doc not in tipos:
-            print(f"   nota: el portal etiqueta este tipo como {list(tipos)[0]!r}")
+            print(f"   nota: el portal etiqueta este tipo como {sorted(tipos)}")
 
         cufes = [d.cufe for d in docs]
         if len(set(cufes)) != len(cufes):
