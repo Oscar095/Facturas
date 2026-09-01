@@ -253,10 +253,20 @@ class NotaCreditoOut(BaseModel):
     numero: str
     proveedor: ProveedorOut
     valor_total: Decimal | None
+    # mismo criterio que en FacturaResumen: None = no se pudo determinar
+    iva: Decimal | None = None
     fecha_emision: datetime | None
     fecha_recepcion: datetime | None
     area: AreaOut | None = None
     responsable: UsuarioOut | None = None
+
+    @computed_field
+    @property
+    def subtotal(self) -> Decimal | None:
+        """Valor SIN IVA — es lo que el panel resta del gasto del área."""
+        if self.valor_total is None:
+            return None
+        return self.valor_total - (self.iva or Decimal(0))
 
 
 class NotaCreditoActualizar(BaseModel):

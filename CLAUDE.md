@@ -308,24 +308,27 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
   a ciegas). Por eso el IVA se deduce del `texto_pdf` con `extraer_iva()`, que **no usa IA**.
 - La clave del método es que **el total ya se conoce**, así que no hace falta entender el
   layout (que es caótico: separadores de miles en punto o en coma en el mismo universo de
-  proveedores, columnas revueltas, retenciones mezcladas). Tres niveles, con la IA de último:
+  proveedores, columnas revueltas, retenciones mezcladas). Cuatro niveles, con la IA de último:
   1. A una tarifa legal el IVA está determinado (`total * r/(1+r)`); se acepta solo si ese
      importe **aparece impreso**. Doble validación (reconcilia Y está escrito).
-  2. Si el total aparece etiquetado como subtotal / base gravable / total bruto, la factura no
+  2. **Tarifa mixta** (`_iva_mixto`): importe etiquetado como IVA cuya base (`total - iva`)
+     **también está impresa**. Va ANTES del nivel 3 a propósito — ver Gotcha 5.
+  3. Si el total aparece etiquetado como subtotal / base gravable / total bruto, la factura no
      lleva IVA → 0.
-  3. **IA (Haiku, `services/iva_ia.py`) — solo si `usar_ia`** y los dos niveles fallaron. Es la
-     única vía para las escaneadas (sin `texto_pdf` no hay dónde buscar) y para las de **tarifa
-     mezclada** (parte gravada, parte exenta: la tarifa global no es 19% ni 5%, así que el
-     nivel 1 nunca las ve). Manda solo el texto recortado —principio + final, porque el bloque
-     de totales va al pie— o el PDF **recortado a la primera y la última página** si viene
-     escaneado. Queda auditado como evento `ia_iva`. Cascada: `resolver_iva()`.
+  4. **IA (Haiku, `services/iva_ia.py`) — solo si `usar_ia`** y los niveles gratis fallaron. Es
+     la única vía para las escaneadas (sin `texto_pdf` no hay dónde buscar) y para las de
+     tarifa mezclada que no imprimen su base. Manda solo el texto recortado —principio + final,
+     porque el bloque de totales va al pie— o el PDF **recortado a la primera y la última
+     página** si viene escaneado. Queda auditado como evento `ia_iva`. Cascada: `resolver_iva()`.
   Lo demás queda en NULL: **`iva IS NULL` significa "no se pudo determinar"**, y ahí el
   subtotal mostrado TODAVÍA incluye IVA — la UI lo marca con un `*` (`.iva-desconocido`).
   No "rellenar" esos NULL con 0: sería presentar como base un valor con impuesto.
 - **Gotcha 1 — tarifas**: solo 19% y 5%. NO agregar 8% (eso es impoconsumo, no IVA) ni 16%
   (derogada): medido sobre los PDF reales, solo sumaban coincidencias. Y se descartó un nivel
-  gratis que tomaba el importe etiquetado junto a "IVA": en las facturas de importación elegía
-  el flete o el gravamen arancelario.
+  gratis que tomaba **a secas** el importe etiquetado junto a "IVA": en las facturas de
+  importación elegía el flete o el gravamen arancelario. El nivel 2 actual (`_iva_mixto`) sí
+  mira esa etiqueta, pero solo acepta el importe si `total - iva` está impreso y la tarifa
+  implícita es ≤ 20% — sin esos dos filtros vuelve el problema del arancel.
 - **Gotcha 2 — la IA sí se inventa el IVA**, igual que se inventaba el vencimiento. Por eso
   `iva_ia._aceptable()` exige TRES cosas y no debe relajarse: (a) `base + iva == total`, y el
   total lo entrega el portal, no el modelo — en pruebas reales delató que había devuelto el
@@ -354,15 +357,31 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
   `texto_pdf` y en las demás la respuesta del modelo no reconcilió con el total — se quedan en
   NULL a propósito. Costo medido con `scripts/estimar_costo_ia_iva.py`: **~US$0,71/mes** (~221
   facturas/mes llegan a la IA: 76 por texto, 144 por visión) más ~US$1 del backfill histórico,
-  una sola vez (fueron dos pasadas: la segunda recuperó 6 facturas tras corregir el parseo). Pruebas: `scripts/probar_iva.py` (17 casos de la vía gratis) y `scripts/probar_iva_ia.py`
+  una sola vez (fueron dos pasadas: la segunda recuperó 6 facturas tras corregir el parseo). Pruebas: `scripts/probar_iva.py` (23 casos de la vía gratis, incluidos 3 de tarifa mixta) y `scripts/probar_iva_ia.py`
   (14 casos del guardarraíl, con respuestas REALES de Haiku; no llama a la API). Backfill
   idempotente: `scripts/backfill_iva.py [--ia] [--aplicar]` (solo toca filas NULL, nunca pisa
   el IVA que extrajo la IA en la carga manual; sin `--ia` no gasta un peso). La ingesta llena
   el IVA de aquí en adelante, con `usar_ia_iva=True` por defecto — pasar False para una corrida
   sin gasto.
-- **Notas crédito**: siguen mostrando su valor total. Sus 22 filas históricas no tienen `iva`
-  ni `texto_pdf`, así que no hay de dónde deducirlo — si se quiere el mismo tratamiento hay
-  que re-descargar sus PDF del Blob primero.
+- **Notas crédito: también sin IVA** (el panel las netea contra lo facturado, y una nota con
+  el IVA incluido restaría de más). `notas_credito.iva` lo llena la ingesta con la MISMA
+  cascada, pero **sin IA** — la regla de "no gastar créditos en notas crédito" sigue en pie y
+  además se midió que no aportaba: la vía gratis resolvió 27/29 (93%) y sobre las 2 restantes
+  la respuesta de Haiku no reconcilió con el total, así que quedaron NULL igual. Backfill:
+  `scripts/backfill_iva_notas_credito.py [--ia] [--aplicar]`, que además **extrae el
+  `texto_pdf` que faltaba** bajando el PDF del Blob (pypdf, gratis) — ya corrido, las 29
+  históricas tienen texto.
+- **Gotcha 5 — la exención se comía las de tarifa MIXTA**: el nivel de exención da por exenta
+  toda factura cuyo total aparezca a ≤90 chars de "SubTotal"/"TOTAL BRUTO", y en las de tarifa
+  mixta (servicios temporales con base gravable especial/AIU, o una factura con un ítem al 19%
+  y otro al 0%) el total se imprime justo ahí, al lado del IVA. El nivel 1 tampoco las ve
+  (la tarifa global no es legal), así que quedaban con `iva = 0` **con el IVA escrito en el
+  documento**. Por eso existe `_iva_mixto()` (nivel 2, ANTES del de exención): toma un importe
+  etiquetado como IVA solo si `total - iva` **también está impreso** — que es lo que descarta
+  el IVA de un renglón suelto —, con `iva ≥ 100` (por debajo es ruido de la tolerancia, o la
+  tarifa "19") y tarifa ≤ 20%. Si dos importes distintos reconcilian, es ambiguo y devuelve
+  None. Corrigió 18 facturas y 3 notas crédito reales; el arreglo del histórico es
+  `scripts/corregir_iva_exentas.py [--aplicar]` (idempotente, sin IA) — ya corrido.
 
 ## Listado de facturas
 
@@ -398,6 +417,11 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
 - **Sí tienen área/responsable** (`notas_credito.area_id` / `responsable_id`), pero **no**
   tienen `estado_proceso`, documentos, eventos ni flujo de aprobación: solo se consultan,
   se descarga el PDF y se sabe a qué área corresponde el crédito.
+- **Cuentan en el dashboard: NETEAN el gasto del área** (sin IVA, ubicadas por su fecha de
+  emisión — ver "Dashboard"). Por eso `notas_credito.iva` se llena igual que en las facturas
+  y el listado muestra **"Valor sin IVA"** (`NotaCreditoOut.subtotal`, con el mismo `*` cuando
+  el IVA no se pudo determinar). El área importa más que antes: una nota sin asignar netea
+  contra "Sin asignar", no contra el área real.
 - **Asignación automática por reglas, SIN IA.** Comparte la cascada con las facturas —
   `reglas._resolver_regla()` es el núcleo común (NIT → patrones de ítem sobre `texto_pdf`) —
   pero se invoca vía `reglas.asignar_area_nota_credito()`, que pasa `usar_ia=False`.
@@ -413,8 +437,8 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
   permiso, solo las del área del usuario (las que están sin asignar solo las ve quien ve
   todas). Por eso la ruta `/notas-credito` y el link del menú **ya no** están detrás de
   `ver_todas_areas` — el filtrado lo hace el backend (`_filtrar_por_rol`), no el frontend.
-- Las notas crédito **históricas quedaron sin área** (decisión: no re-descargar el histórico
-  del Blob para extraerles el texto). Se asignan a mano con el dropdown; el filtro
+- Las notas crédito históricas ya **sí tienen `texto_pdf`** (lo extrajo del Blob el backfill
+  de IVA), pero su área se asignó a mano en su momento. Se asignan a mano con el dropdown; el filtro
   `?sin_area=true` ("Solo sin área" en la UI) sirve justamente para irlas despachando.
 
 ## Dashboard (`/`, página de inicio)
@@ -428,15 +452,29 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
   puede analizar cualquier mes histórico. Por defecto es el mes en curso; un formato
   inválido responde 400. `meses_disponibles` (del primer documento al mes actual, tope
   `_MAX_MESES_SELECTOR`) alimenta el selector de la página.
-- **La matriz agrupa por mes en Python, no en SQL** (`_clave_mes`): `DATEPART`/`strftime`
-  darían el mes UTC y una factura recibida 19:00–23:59 hora Bogotá cae al día/mes siguiente
-  en UTC. Además evita depender del dialecto (Azure SQL vs SQLite local). La ventana está
-  acotada a `meses` (≤ 24), así que la consulta trae pocas filas.
-- **Gotcha de zona horaria**: las fechas se guardan en UTC-naive pero el negocio opera en
-  Bogotá (UTC-5, sin DST). Los cortes de mes/año se calculan en hora local y se convierten a
-  UTC (`_DESFASE_BOGOTA = timedelta(hours=5)`, helpers `_rango_mes_utc`/`_sumar_meses`) antes
-  de filtrar. Si se agregan más cortes de fecha al panel, seguir ese mismo patrón — comparar
-  directo en UTC sin el desfase corta el mes en el momento equivocado.
+- **TODO el panel mide por `fecha_emision`, NO por `fecha_recepcion`** (`_EMISION`, un
+  `coalesce(fecha_emision, fecha_recepcion, creado_en)`): una factura emitida el 30 de julio y
+  descargada el 2 de agosto es gasto de **julio**. Antes se medía por la fecha en que el robot
+  la bajaba y las cifras se corrían de mes (lo pidió el usuario: "las cuentas… siempre debe
+  tomarse en cuenta la fecha de emisión"). Aplica a las tarjetas, a `por_area`, a la matriz y
+  al orden/conteo de días de `mas_antiguas`. No devolverlo a recepción.
+- **Consecuencia en la zona horaria**: `fecha_emision` se guarda tal cual la entrega el portal
+  (**hora local de Colombia**, a las 00:00), mientras que `fecha_recepcion`/`creado_en` están
+  en UTC. Por eso los cortes de mes ya **no** llevan el desfase (`_rango_mes` devuelve
+  medianoche local y `_clave_mes` no convierte nada); `_DESFASE_BOGOTA` sobrevive solo para
+  saber en qué mes local estamos (`_ahora_local`) y para contar días sin procesar. Si algún día
+  se vuelve a filtrar por `fecha_recepcion`, hay que reponer el desfase — mezclar las dos
+  columnas en un mismo corte es el error a evitar.
+- **La matriz agrupa por mes en Python, no en SQL** (`_clave_mes`): evita depender del
+  dialecto (Azure SQL vs SQLite local) y deja el corte donde lo pone la emisión, sin
+  traducciones de huso. La ventana está acotada a `meses` (≤ 24), así que trae pocas filas.
+- **Las notas crédito NETEAN** (decisión del usuario): se restan del área a la que
+  corresponden, sin IVA, en las tarjetas (`valor_total` = `facturado` − `valor_notas_credito`),
+  en `por_area` y en cada celda de la matriz. Un área puede aparecer **solo** por sus notas
+  crédito (crédito de un mes anterior): se lista igual, con `cantidad: 0` y valor negativo —
+  esconderla sería mentir sobre el periodo. En el mapa de calor esas celdas salen de la rampa
+  azul y se pintan con `.celda-neg` (no son "menos gasto", son signo contrario).
+  `_alcance_por_rol(..., modelo=NotaCredito)` aplica el mismo filtro por área.
 - El mapa de calor usa una **rampa secuencial de un solo tono** (azul de marca, `.celda-n1..n5`
   en `styles.css`): claro→oscuro = más gasto, con texto blanco solo en el paso más oscuro.
   No convertirla en multicolor ni reusarla para categorías sin orden natural.

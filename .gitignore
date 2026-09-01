@@ -33,3 +33,6 @@ desktop.ini
 # Claude Code (local, no compartir)
 .claude/settings.local.json
 .claude/skills/
+
+# Capturas que dejan las pruebas de UI en la raíz (el logo de frontend/public sí se versiona)
+/*.png

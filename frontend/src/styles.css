@@ -405,6 +405,7 @@ a:hover { text-decoration: underline; }
 .barra-nombre { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .barra-nombre.sin { font-weight: 600; }
 .barra-cant { color: var(--tinta-sub); font-size: 12px; }
+.barra-nc { color: var(--oro); cursor: help; }
 .barra-pista { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .barra-track { flex: 1; min-width: 0; display: flex; }
 .barra-relleno {
@@ -486,6 +487,9 @@ a:hover { text-decoration: underline; }
 .celda-n4 { background: #22a5e0; }
 .celda-n5 { background: #0b7cb5; color: #fff; }
 .tabla.matriz td.celda-n0 { color: var(--tinta-tenue); }
+/* Mes en rojo: las notas crédito del área superaron lo que facturó. Fuera de la
+   rampa azul a propósito — no es "menos gasto", es signo contrario. */
+.celda-neg { background: #fdeceb; color: #a12b1e; font-weight: 600; }
 
 /* ── aprobación con firma ── */
 .aprobar-panel {

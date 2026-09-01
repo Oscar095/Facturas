@@ -27,8 +27,10 @@ function claseDias(dias) {
 
 // Intensidad de la celda del mapa de calor (rampa secuencial de un solo tono,
 // clara → oscura). El nivel 0 no pinta: distingue "sin gasto" de "gasto bajo".
+// Los negativos (mes en que las notas crédito superaron lo facturado) no entran
+// en la rampa: se pintan aparte con .celda-neg.
 function nivelCelda(valor, maximo) {
-  if (!valor || maximo <= 0) return 0;
+  if (!valor || valor < 0 || maximo <= 0) return 0;
   const razon = valor / maximo;
   if (razon > 0.66) return 5;
   if (razon > 0.4) return 4;
@@ -109,7 +111,7 @@ export default function Dashboard() {
         <div className="kpi" style={{ "--i": 0 }}>
           <div className="kpi-etiqueta">Facturas del mes</div>
           <div className="kpi-valor">{kpis.total}</div>
-          <div className="kpi-sub">recibidas en {etiquetaMes(mesSel, true).toLowerCase()}</div>
+          <div className="kpi-sub">emitidas en {etiquetaMes(mesSel, true).toLowerCase()}</div>
         </div>
         <div className="kpi" style={{ "--i": 1 }}>
           <div className="kpi-etiqueta">Pendientes</div>
@@ -123,8 +125,20 @@ export default function Dashboard() {
         </div>
         <div className="kpi" style={{ "--i": 3 }}>
           <div className="kpi-etiqueta">Valor del mes</div>
-          <div className="kpi-valor">{formatoPesosCompacto(kpis.valor_total)}</div>
-          <div className="kpi-sub">total facturado</div>
+          <div className="kpi-valor" title={formatoPesos(kpis.valor_total)}>
+            {formatoPesosCompacto(kpis.valor_total)}
+          </div>
+          <div className="kpi-sub">
+            {kpis.notas_credito > 0 ? (
+              <>
+                sin IVA · {formatoPesosCompacto(kpis.facturado)} −{" "}
+                {formatoPesosCompacto(kpis.valor_notas_credito)} de {kpis.notas_credito}{" "}
+                {kpis.notas_credito === 1 ? "nota crédito" : "notas crédito"}
+              </>
+            ) : (
+              "facturado sin IVA"
+            )}
+          </div>
         </div>
       </div>
 
@@ -157,6 +171,14 @@ export default function Dashboard() {
                   <span className="barra-cant">
                     {a.cantidad} {a.cantidad === 1 ? "factura" : "facturas"}
                     {a.pendientes > 0 && ` · ${a.pendientes} pend.`}
+                    {a.notas_credito > 0 && (
+                      <span
+                        className="barra-nc"
+                        title={`${formatoPesos(a.valor_notas_credito)} en notas crédito ya descontados`}
+                      >
+                        {` · −${formatoPesosCompacto(a.valor_notas_credito)} NC`}
+                      </span>
+                    )}
                   </span>
                 </div>
                 <div className="barra-pista" title={formatoPesos(a.valor)}>
@@ -202,9 +224,10 @@ export default function Dashboard() {
         </div>
       </div>
       <p className="ayuda">
-        Cada celda es lo facturado por el área en ese mes (color más intenso = más gasto);
-        la última columna acumula la ventana completa y las dos filas finales muestran el
-        total mensual y su acumulado corrido.
+        Cada celda es el gasto neto del área en ese mes —sin IVA y con las notas crédito ya
+        descontadas—, ubicado por la fecha de emisión del documento (color más intenso = más
+        gasto). La última columna acumula la ventana completa y las dos filas finales muestran
+        el total mensual y su acumulado corrido.
       </p>
       <div className={cargando ? "tabla-scroll recargando" : "tabla-scroll"}>
         <table className="tabla matriz">
@@ -235,7 +258,11 @@ export default function Dashboard() {
                   {fila.valores.map((v, i) => (
                     <td
                       key={matriz.meses[i]}
-                      className={`der mono celda-n${nivelCelda(v, maxCelda)}`}
+                      className={
+                        v < 0
+                          ? "der mono celda-neg"
+                          : `der mono celda-n${nivelCelda(v, maxCelda)}`
+                      }
                       title={`${fila.area} · ${etiquetaMes(matriz.meses[i], true)}: ${formatoPesos(v)}`}
                     >
                       {v ? formatoPesosCompacto(v) : "—"}
@@ -278,8 +305,9 @@ export default function Dashboard() {
       {/* ── facturas con más tiempo sin procesar ── */}
       <h2>Facturas con más tiempo sin procesar</h2>
       <p className="ayuda">
-        Las más antiguas aún pendientes (de todo el histórico, sin importar el mes elegido).
-        Haz clic para abrir el detalle y gestionar los documentos que faltan.
+        Las de emisión más antigua que siguen pendientes (de todo el histórico, sin importar
+        el mes elegido). Los días se cuentan desde que el proveedor las emitió. Haz clic para
+        abrir el detalle y gestionar los documentos que faltan.
       </p>
       <div className="tabla-wrap">
         <table className="tabla">
@@ -289,7 +317,7 @@ export default function Dashboard() {
               <th>Proveedor</th>
               <th>Área</th>
               <th className="der">Valor</th>
-              <th>Recibida</th>
+              <th>Emitida</th>
               <th>Días sin procesar</th>
               <th>Estado</th>
             </tr>
@@ -310,7 +338,7 @@ export default function Dashboard() {
                     <td className="prov">{f.proveedor}</td>
                     <td>{f.area || <span className="sin">sin asignar</span>}</td>
                     <td className="der mono">{formatoPesos(f.valor_total)}</td>
-                    <td>{formatoFecha(f.fecha_recepcion)}</td>
+                    <td>{formatoFecha(f.fecha_emision)}</td>
                     <td>
                       {f.dias_sin_procesar == null ? (
                         "—"

@@ -28,7 +28,25 @@ CASOS = [
     ("Subtotal 576.818,49 IVA 109.595,51 Total 686.414,00",
      D("686414.00"), D("109595.51")),
 
-    # ── nivel 2: el total impreso como base => sin IVA ──
+    # ── nivel 2: tarifa MIXTA — IVA impreso cuya base reconcilia con el total ──
+    # Estos documentos imprimen el total pegado a "SubTotal"/"TOTAL BRUTO", así que
+    # la regla de exención (nivel 3) los daba por exentos aunque el IVA estuviera
+    # escrito al lado. Fragmentos reales: servicios temporales con base gravable
+    # especial (AIU) y facturas con parte gravada y parte exenta.
+    ("BASE GRAVABLE ESPECIAL ART. 46 LEY 1607 ARTICULO 11 $24.290 "
+     "SubTotal 242.899,00 IVA 19% 4.615,00 Total 247.514,00 ELABORO REVISO",
+     D("247514.00"), D("4615.00")),
+    ("CLOUD COMPUTING SERVICES IVA 0.00 % $ 1,808,940.001 70342 1 SIESA SERVICES "
+     "IVA 19.00 % $ 904,470.002 70700 1 # ITEMS: 2 VALOR BRUTO: IVA: TOTAL A PAGAR: "
+     "$ 2,713,410.00 $ 171,849.00 $ 2,885,259.00 No. CUOTA FECHA VALOR "
+     "BASE TASA VALORIMPUESTOS IVA $ 904,470.00 19.00 % $ 171,849.00",
+     D("2885259.00"), D("171849.00")),
+    # el IVA de UN RENGLÓN (66,739) no debe ganarle al del pie: su base no reconcilia
+    ("1. ALOJAMIENTO CABAÑAS 2.00 C62 175,630.00 IVA 19.00 66,739.00 351,260.00 "
+     "IVA 19.00% 88,486.00 COPMONEDA 530,316.00TOTAL BRUTO 465,716.00TOTAL BASE",
+     D("618802.00"), D("88486.00")),
+
+    # ── nivel 3: el total impreso como base => sin IVA ──
     ("No responsable de IVA - Actividad Económica 7020 Adjunto soporte de pago "
      "Total Bruto 1,530,000.00 Total a Pagar 1,530,000.00",
      D("1530000.00"), D("0.00")),

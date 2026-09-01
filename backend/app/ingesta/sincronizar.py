@@ -135,7 +135,8 @@ def _crear_factura(db: Session, doc: DocumentoPortal, siesa: SiesaClient, almace
     return factura
 
 
-def _crear_nota_credito(db: Session, doc: DocumentoPortal, siesa: SiesaClient, almacen) -> NotaCredito:
+def _crear_nota_credito(db: Session, doc: DocumentoPortal, siesa: SiesaClient, almacen,
+                        usar_ia_iva: bool = False) -> NotaCredito:
     """Notas crédito no pasan por el flujo de aprobación: se extraen y se guardan
     para consulta, sin documentos/eventos. Sí se les asigna área con las mismas
     reglas del proveedor (sin IA), para saber a quién corresponde el crédito."""
@@ -145,6 +146,14 @@ def _crear_nota_credito(db: Session, doc: DocumentoPortal, siesa: SiesaClient, a
     ruta = _ruta_blob(doc.nit_emisor, doc.folio, doc.fecha, carpeta="notas_credito")
     almacen.subir(ruta, pdf, content_type="application/pdf")
 
+    # texto de la nota para evaluar patrones de ítem (reglas de área) y deducir el IVA
+    texto = extraer_texto(pdf)
+    # El panel netea las notas crédito contra lo facturado y todo se mide SIN IVA:
+    # una nota con el IVA incluido restaría de más. Misma cascada que las facturas.
+    # (A diferencia de la factura no queda evento: eventos.factura_id es NOT NULL
+    # contra facturas, así que una nota crédito no puede auditarse ahí.)
+    iva, _ = resolver_iva(texto, doc.valor, pdf=pdf, usar_ia=usar_ia_iva)
+
     nota = NotaCredito(
         cufe=doc.cufe,
         prefijo="",
@@ -153,10 +162,10 @@ def _crear_nota_credito(db: Session, doc: DocumentoPortal, siesa: SiesaClient, a
         fecha_emision=doc.fecha,
         fecha_recepcion=ahora(),
         valor_total=doc.valor,
+        iva=iva,
         estado_portal=doc.estado_adquiriente,
         blob_pdf=ruta,
-        # texto de la nota para evaluar patrones de ítem (reglas de área)
-        texto_pdf=extraer_texto(pdf),
+        texto_pdf=texto,
     )
     db.add(nota)
     db.flush()
@@ -179,7 +188,8 @@ def sincronizar(db: Session, dias: int = 3,
     vencimiento SOLO en las facturas donde los patrones gratuitos no la
     encontraron. Pasar False para una corrida sin gasto de API.
     usar_ia_iva: igual, pero para el IVA (services/iva_ia.py) — solo cuando la
-    reconciliación aritmética gratuita no lo determinó.
+    reconciliación aritmética gratuita no lo determinó. Solo aplica a las
+    facturas: las notas crédito deducen su IVA únicamente por la vía gratis.
     """
     hoy = date.today()
     desde = fecha_desde or (hoy - timedelta(days=dias)).isoformat()
@@ -258,7 +268,11 @@ def sincronizar(db: Session, dias: int = 3,
                 if _existe_cufe_nc(db, doc.cufe):
                     continue
                 try:
-                    _crear_nota_credito(db, doc, siesa, almacen)
+                    # Sin IA a propósito (regla de negocio: no se gastan créditos
+                    # de Claude en notas crédito). La vía gratis resuelve el 93%
+                    # de las históricas, y sobre las 2 que no, la IA tampoco pudo:
+                    # su respuesta no reconcilió con el total y quedaron en NULL.
+                    _crear_nota_credito(db, doc, siesa, almacen, usar_ia_iva=False)
                     db.commit()
                     notas_credito_nuevas += 1
                 except Exception as e:  # noqa: BLE001

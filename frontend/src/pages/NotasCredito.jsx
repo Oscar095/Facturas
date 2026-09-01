@@ -122,7 +122,7 @@ export default function NotasCredito() {
             <tr>
               <th>Folio</th>
               <th>Proveedor</th>
-              <th className="der">Valor</th>
+              <th className="der">Valor sin IVA</th>
               <th>Emisión</th>
               <th>Cargada</th>
               <th>Área</th>
@@ -150,7 +150,17 @@ export default function NotasCredito() {
                     <div className="prov">{n.proveedor.razon_social}</div>
                     <div className="prov-nit">{n.proveedor.nit}</div>
                   </td>
-                  <td className="der mono">{formatoPesos(n.valor_total)}</td>
+                  <td className="der mono">
+                    {formatoPesos(n.subtotal)}
+                    {n.iva == null && (
+                      <span
+                        className="iva-desconocido"
+                        title="No se pudo determinar el IVA de esta nota crédito: el valor mostrado todavía lo incluye."
+                      >
+                        *
+                      </span>
+                    )}
+                  </td>
                   <td>{formatoFecha(n.fecha_emision)}</td>
                   <td>{formatoFecha(n.fecha_recepcion)}</td>
                   <td>
