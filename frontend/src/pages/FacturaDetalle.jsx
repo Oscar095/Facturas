@@ -18,7 +18,8 @@ export default function FacturaDetalle() {
   const [factura, setFactura] = useState(null);
   const [areas, setAreas] = useState([]);
   const [error, setError] = useState("");
-  const [subiendo, setSubiendo] = useState(false);
+  // null = libre; si no, el progreso de la subida en curso ("2 de 3")
+  const [subiendo, setSubiendo] = useState(null);
   const [cambiandoArea, setCambiandoArea] = useState(false);
   const [tipoCarga, setTipoCarga] = useState("OCN");
   const archivoRef = useRef();
@@ -70,24 +71,32 @@ export default function FacturaDetalle() {
     }
   }
 
+  // Varios archivos de una vez, de cualquier tipo. Se suben UNO POR UNO (cada
+  // respuesta trae la factura actualizada) y un archivo que falle no frena a los
+  // demás: al final se informa cuáles no entraron.
   async function subir(e) {
     e.preventDefault();
     setError("");
-    const archivo = archivoRef.current.files[0];
-    if (!archivo) return;
-    setSubiendo(true);
+    const archivos = Array.from(archivoRef.current.files || []);
+    if (archivos.length === 0) return;
+    const fallidos = [];
     try {
-      const form = new FormData();
-      form.append("tipo", tipoCarga);
-      form.append("archivo", archivo);
-      const actualizada = await api.postForm(`/api/documentos/${id}`, form);
-      setFactura(actualizada);
-      archivoRef.current.value = "";
-    } catch (err) {
-      setError(err.message);
+      for (const [i, archivo] of archivos.entries()) {
+        setSubiendo(`${i + 1} de ${archivos.length}`);
+        try {
+          const form = new FormData();
+          form.append("tipo", tipoCarga);
+          form.append("archivo", archivo);
+          setFactura(await api.postForm(`/api/documentos/${id}`, form));
+        } catch (err) {
+          fallidos.push(`${archivo.name}: ${err.message}`);
+        }
+      }
     } finally {
-      setSubiendo(false);
+      setSubiendo(null);
+      archivoRef.current.value = "";
     }
+    if (fallidos.length) setError(`No se pudieron subir: ${fallidos.join(" · ")}`);
   }
 
   async function eliminarDoc(docId) {
@@ -150,11 +159,28 @@ export default function FacturaDetalle() {
     }
   }
 
-  function abrirArchivo(url) {
-    // Abre el PDF/documento pasando el token (el backend hace proxy o redirige a SAS)
+  // El backend sirve los bytes (proxy con el token). PDF, imágenes y texto se ven
+  // en una pestaña; lo demás (Excel, Word, correos .msg…) se DESCARGA con su nombre
+  // real — abierto como blob en una pestaña, el navegador lo bajaba con un nombre
+  // aleatorio sin extensión y no había cómo abrirlo.
+  function abrirArchivo(url, nombre = "") {
     fetch(url, { headers: { Authorization: `Bearer ${getToken()}` } })
-      .then((r) => r.blob())
-      .then((b) => window.open(URL.createObjectURL(b), "_blank"))
+      .then((r) => {
+        if (!r.ok) throw new Error();
+        return r.blob();
+      })
+      .then((b) => {
+        const enlace = URL.createObjectURL(b);
+        if (/^(application\/pdf|image\/|text\/)/.test(b.type)) {
+          window.open(enlace, "_blank");
+        } else {
+          const a = document.createElement("a");
+          a.href = enlace;
+          a.download = nombre || "documento";
+          a.click();
+        }
+        setTimeout(() => URL.revokeObjectURL(enlace), 60000);
+      })
       .catch(() => setError("No se pudo abrir el archivo"));
   }
 
@@ -288,7 +314,7 @@ export default function FacturaDetalle() {
                   href="#"
                   onClick={(e) => {
                     e.preventDefault();
-                    abrirArchivo(`/api/facturas/documento/${d.id}/archivo`);
+                    abrirArchivo(`/api/facturas/documento/${d.id}/archivo`, d.nombre_archivo);
                   }}
                 >
                   {d.nombre_archivo}
@@ -318,11 +344,16 @@ export default function FacturaDetalle() {
                 </option>
               ))}
             </select>
-            <input type="file" ref={archivoRef} required />
-            <button className="btn" disabled={subiendo}>
-              {subiendo ? "Subiendo…" : "Subir"}
+            <input type="file" ref={archivoRef} multiple required />
+            <button className="btn" disabled={!!subiendo}>
+              {subiendo ? `Subiendo ${subiendo}…` : "Subir"}
             </button>
           </div>
+          <p className="ayuda">
+            Puedes elegir varios archivos a la vez y de cualquier tipo (PDF, fotos, Excel,
+            correos…). Todos quedan con el tipo seleccionado. Al aprobar, la firma se estampa
+            solo en los PDF.
+          </p>
         </form>
 
         {puedeAprobar &&
@@ -342,7 +373,8 @@ export default function FacturaDetalle() {
             <h3>Firmar y aprobar</h3>
             <p className="ayuda">
               Tu firma se estampará en todas las páginas de todos los documentos
-              PDF adjuntos a la factura, en la esquina inferior derecha.
+              PDF adjuntos a la factura, en la esquina inferior derecha. Los demás
+              archivos (fotos, Excel, correos…) quedan adjuntos sin firma.
             </p>
             {firmas.length === 0 ? (
               <p className="ayuda">

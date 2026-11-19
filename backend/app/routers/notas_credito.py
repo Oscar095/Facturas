@@ -19,6 +19,7 @@ from ..models import NotaCredito, Proveedor, Usuario
 from ..schemas import NotaCreditoActualizar, NotaCreditoOut, PaginaNotasCredito
 from ..security import requiere_permiso, tiene_permiso, usuario_actual
 from ..services.blob_storage import get_almacen
+from ..services.disposicion import disposicion
 
 router = APIRouter(prefix="/api/notas-credito", tags=["notas_credito"])
 
@@ -98,4 +99,4 @@ def descargar_pdf(nota_id: int, db: Session = Depends(get_db),
     # Proxy de bytes desde el backend (nunca redirect/SAS: Blob no tiene CORS)
     datos = get_almacen().descargar(nota.blob_pdf)
     return Response(datos, media_type="application/pdf",
-                    headers={"Content-Disposition": f'inline; filename="{nota.numero}.pdf"'})
+                    headers={"Content-Disposition": disposicion(f"{nota.numero}.pdf")})

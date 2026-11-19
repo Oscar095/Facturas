@@ -22,6 +22,7 @@ from ..schemas import (
 from ..security import requiere_permiso, tiene_permiso, usuario_actual
 from ..services import reglas
 from ..services.blob_storage import get_almacen
+from ..services.disposicion import disposicion
 from ..services.firmar_pdf import estampar_firma
 
 router = APIRouter(prefix="/api/facturas", tags=["facturas"])
@@ -121,7 +122,7 @@ def descargar_pdf(factura_id: int, db: Session = Depends(get_db),
     # estar habilitado en la cuenta de almacenamiento.
     datos = get_almacen().descargar(factura.blob_pdf)
     return Response(datos, media_type="application/pdf",
-                    headers={"Content-Disposition": f'inline; filename="{factura.numero}.pdf"'})
+                    headers={"Content-Disposition": disposicion(f"{factura.numero}.pdf")})
 
 
 @router.get("/documento/{documento_id}/archivo")
@@ -134,7 +135,7 @@ def descargar_documento(documento_id: int, db: Session = Depends(get_db),
     datos = get_almacen().descargar(doc.blob_path)
     content_type = mimetypes.guess_type(doc.nombre_archivo)[0] or "application/octet-stream"
     return Response(datos, media_type=content_type,
-                    headers={"Content-Disposition": f'inline; filename="{doc.nombre_archivo}"'})
+                    headers={"Content-Disposition": disposicion(doc.nombre_archivo)})
 
 
 @router.patch("/{factura_id}", response_model=FacturaDetalle)

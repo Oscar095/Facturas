@@ -15,8 +15,11 @@ _LOCAL_BASE = Path("descargas/blob")
 
 
 class AlmacenLocal:
-    def subir(self, ruta: str, datos: bytes, content_type: str | None = None) -> str:
+    def subir(self, ruta: str, datos: bytes, content_type: str | None = None,
+              sobrescribir: bool = True) -> str:
         destino = _LOCAL_BASE / ruta
+        if not sobrescribir and destino.exists():
+            raise FileExistsError(f"Ya existe un archivo en {ruta}")
         destino.parent.mkdir(parents=True, exist_ok=True)
         destino.write_bytes(datos)
         return ruta
@@ -39,12 +42,16 @@ class AlmacenAzure:
         except Exception:
             pass  # ya existe
 
-    def subir(self, ruta: str, datos: bytes, content_type: str | None = None) -> str:
+    def subir(self, ruta: str, datos: bytes, content_type: str | None = None,
+              sobrescribir: bool = True) -> str:
+        """Con sobrescribir=False, Azure rechaza la subida (ResourceExistsError) si
+        la ruta ya existe — la red de seguridad para lo que suben los usuarios."""
         from azure.storage.blob import ContentSettings
 
         ct = content_type or mimetypes.guess_type(ruta)[0] or "application/octet-stream"
         blob = self._svc.get_blob_client(self._contenedor, ruta)
-        blob.upload_blob(datos, overwrite=True, content_settings=ContentSettings(content_type=ct))
+        blob.upload_blob(datos, overwrite=sobrescribir,
+                         content_settings=ContentSettings(content_type=ct))
         return ruta
 
     def descargar(self, ruta: str) -> bytes:

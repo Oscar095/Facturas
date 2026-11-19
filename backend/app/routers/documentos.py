@@ -1,3 +1,7 @@
+import re
+import uuid
+from pathlib import PurePath
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
@@ -12,6 +16,28 @@ router = APIRouter(prefix="/api/documentos", tags=["documentos"])
 
 # Tipos que un usuario puede adjuntar (la FV la carga el robot)
 TIPOS_CARGABLES = {"OCN", "OCS", "CRN", "OTRO"}
+
+
+def _nombre_seguro(nombre: str) -> str:
+    """Nombre apto para ruta de Blob, conservando la extensión (la firma decide
+    por ella qué documentos son PDF)."""
+    base = PurePath(nombre.replace("\\", "/")).name  # algunos navegadores mandan la ruta
+    limpio = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("._") or "archivo"
+    return limpio[-120:]  # el recorte va por el inicio: la extensión queda
+
+
+def ruta_documento(factura_id: int, tipo: str, nombre_archivo: str) -> str:
+    """Ruta ÚNICA en el Blob para un documento adjunto.
+
+    Antes era `documentos/{factura}/{tipo}_{numero}.{ext}`: dos archivos del mismo
+    tipo en la misma factura (tres soportes "Otro", dos fotos) caían en la MISMA
+    ruta, cada subida pisaba a la anterior y todas las filas terminaban abriendo el
+    último archivo. Así quedaron 43 documentos reales abriendo el archivo de otro
+    (34 se perdieron sin remedio; ver CLAUDE.md). El UUID hace la ruta
+    irrepetible; el nombre original va detrás solo para que el Blob sea legible.
+    Mismo patrón que `routers/firmas.py`.
+    """
+    return f"documentos/{factura_id}/{tipo}_{uuid.uuid4().hex[:12]}_{_nombre_seguro(nombre_archivo)}"
 
 
 @router.post("/{factura_id}", response_model=FacturaDetalle)
@@ -36,19 +62,23 @@ def subir_documento(
     if not datos:
         raise HTTPException(400, "Archivo vacío")
 
-    ext = (archivo.filename or "").rsplit(".", 1)[-1].lower() or "bin"
-    ruta = f"documentos/{factura_id}/{tipo}_{factura.numero}.{ext}"
-    get_almacen().subir(ruta, datos, content_type=archivo.content_type)
+    # Se acepta CUALQUIER tipo de archivo (soportes, fotos, Excel, correos .msg):
+    # la firma al aprobar solo se estampa en los PDF y omite el resto.
+    nombre = PurePath((archivo.filename or "").replace("\\", "/")).name or f"{tipo}.bin"
+    ruta = ruta_documento(factura_id, tipo, nombre)
+    # sobrescribir=False: un adjunto nunca debe destruir otro archivo, aunque
+    # alguien vuelva a construir una ruta repetible por error.
+    get_almacen().subir(ruta, datos, content_type=archivo.content_type, sobrescribir=False)
 
     db.add(Documento(
         factura_id=factura.id,
         tipo=tipo,
         blob_path=ruta,
-        nombre_archivo=archivo.filename or f"{tipo}.{ext}",
+        nombre_archivo=nombre,
         subido_por_id=usuario.id,
     ))
     db.add(Evento(factura_id=factura.id, usuario_id=usuario.id, accion="carga_documento",
-                  detalle=f"{tipo}: {archivo.filename}"))
+                  detalle=f"{tipo}: {nombre}"))
     db.flush()
     reglas.evaluar_completitud(db, factura)
     db.commit()

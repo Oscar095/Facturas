@@ -17,6 +17,7 @@ from ..models import Firma, Usuario
 from ..schemas import FirmaOut
 from ..security import usuario_actual
 from ..services.blob_storage import get_almacen
+from ..services.disposicion import disposicion
 
 router = APIRouter(prefix="/api/firmas", tags=["firmas"])
 
@@ -84,7 +85,7 @@ def imagen_firma(firma_id: int, db: Session = Depends(get_db),
     return Response(
         datos,
         media_type=_EXTENSIONES.get(ext, "application/octet-stream"),
-        headers={"Content-Disposition": f'inline; filename="{firma.nombre_archivo}"',
+        headers={"Content-Disposition": disposicion(firma.nombre_archivo),
                  # imagen privada: que ningún proxy/navegador compartido la cachee
                  "Cache-Control": "private, no-store"},
     )

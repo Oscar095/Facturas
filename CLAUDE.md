@@ -232,6 +232,45 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
   el blob (`eliminar()` en blob_storage). No romper esto al construir el flujo de firmado:
   verificar propiedad de `firma_id` otra vez en el momento de firmar.
 
+## Documentos adjuntos (`routers/documentos.py`)
+
+- **Se acepta cualquier tipo de archivo** (PDF, fotos, Excel, correos `.msg`, sin
+  extensión…): son soportes e informativos. Al aprobar, **la firma se estampa solo en los
+  PDF** (`_sellar_documentos` decide por la extensión); el resto queda adjunto sin firma y
+  anotado en el evento. La UI permite **elegir varios archivos a la vez** (se suben uno por
+  uno, todos con el tipo elegido; uno que falle no frena a los demás) y **descarga** con su
+  nombre real lo que el navegador no sabe mostrar — abierto como blob en una pestaña, un
+  Excel bajaba con un nombre aleatorio sin extensión.
+- **La ruta en el Blob es ÚNICA por documento** (`ruta_documento()`:
+  `documentos/{factura}/{tipo}_{uuid12}_{nombre}`) y la subida va con
+  `sobrescribir=False`. **Bug grave que esto corrige (2026-09-14):** la ruta era
+  `documentos/{factura}/{tipo}_{numero}.{ext}`, así que dos archivos del mismo tipo en la
+  misma factura caían en la MISMA ruta; cada subida **sobrescribía** a la anterior y todas
+  las filas abrían el último archivo (al aprobar, se firmaba N veces ese mismo). Los
+  usuarios lo veían como "documentos duplicados" y subían/borraban/re-subían, lo que pisaba
+  más. **43 documentos reales** quedaron así: 9 se recuperaron y **34 se perdieron** (en su
+  mayoría CRI/OEN/NC de facturas ya contabilizadas, pisados hace más de 7 días) — solo se
+  arreglan volviendo a subir el archivo. No volver a construir rutas de Blob que se puedan
+  repetir con datos del usuario; mismo patrón que `routers/firmas.py`.
+- **La cuenta `datalakekos` tiene soft delete de blobs a 7 días**: una sobrescritura o un
+  borrado deja un snapshot recuperable durante ese plazo. Es la única red de seguridad que
+  hay — ante cualquier pérdida de archivos, **mirar los snapshots ANTES de que venzan**
+  (`list_blobs(include=["deleted","snapshots"])`, luego `undelete_blob()`).
+  `scripts/recuperar_documentos_pisados.py [--aplicar]` hace la recuperación sin adivinar:
+  reconstruye el historial de escrituras a cada ruta desde `eventos` (`carga_documento`,
+  incluidas las de filas ya eliminadas), asigna a cada documento el único snapshot de su
+  intervalo, valida los PDF contra los números de su nombre y sube a ruta nueva, dejando un
+  evento `recupera_documento` con la ruta anterior. Si el documento estaba en una factura
+  aprobada, la copia recuperada **no lleva sello** (la firma se había estampado sobre el
+  archivo equivocado, y re-firmar con la firma de otro desde un script rompería la regla de
+  privacidad de las firmas). Ya corrido.
+- **Nombres fuera de latin-1** (guion largo, comillas tipográficas, emoji): las cabeceras
+  HTTP van en latin-1 y `Content-Disposition` con esos nombres respondía **500**. Todas las
+  descargas usan `services/disposicion.py` (`filename` ASCII + `filename*=UTF-8''…`).
+- Pruebas: `scripts/probar_documentos_multiples_api.py` (mismo tipo y mismo nombre en rutas
+  distintas, cada uno con sus bytes, cualquier extensión, firma solo en PDF y cada PDF
+  firmado sobre su propio contenido) y `scripts/probar_ui_documentos_multiples.py`.
+
 ## Carga manual de facturas (`/cargar-factura`, `routers/carga_facturas.py`)
 
 - Para el ~20% de facturas que NO llegan por Siesa (físicas o de correo). Flujo en 2 pasos,
@@ -527,6 +566,14 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
   filtros ya salió a producción (commit "Segundo Deploy"); la migración de Azure SQL se corrió
   ANTES del deploy (orden crítico: `create_all()` no altera tablas existentes). Lo mismo aplica
   a `scripts/migrar_area_notas_credito.py` (área en notas crédito) — **ya corrido en Azure SQL**.
+- **Scripts de prueba que tocan datos REALES — leer antes de correr.** Casi todos crean una
+  factura sintética y la limpian, pero no todos: `scripts/probar_documentos.py` subía PDFs
+  falsos a las dos primeras facturas reales del listado (ensució FV11990 y GF49586 el
+  2026-09-14, se revirtió) y quedó neutralizado con un `SystemExit`. Además, dos pruebas
+  están desactualizadas y fallan por sí solas: `probar_flujo_aprobacion.py` espera 400 al
+  aprobar sin cuerpo y hoy es 422 (la aprobación exige `firma_id`), y `probar_firmas_api.py`
+  entra con `prueba.firmas@kos.com`, que está desactivado — **y deja huérfana en la cuenta
+  admin la firma que alcanzó a subir** (hubo que borrarla a mano).
 - **Cleanup pendiente (menor)**: `models.py` tiene una constante `ESTADOS_PROCESO` que quedó
   desactualizada (no incluye `procesada`/`aprobada`) — no se usa en ningún otro lado del
   backend (verificado por grep), es inofensiva pero conviene corregirla o borrarla si se toca
