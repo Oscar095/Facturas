@@ -13,14 +13,21 @@ para revisar estado, asignar áreas responsables y cargar los documentos que fal
 contabilizar. n8n dispara la ingesta a diario por HTTP.
 
 Flujo: `n8n → POST /api/jobs/sync → ingesta Playwright (portal Siesa) → Blob + SQL`.
-La ingesta trae 3 tipos de documento en la misma sesión de navegador
-(`filters[tipoDocRecepcion]`): **Facturas** (`tipo_doc=1`) y **Documentos Equivalentes**
-(`tipo_doc=20`) van a la tabla `facturas` diferenciados por la columna
-`tipo_documento` (`FACTURA|EQUIVALENTE`) — un Equivalente reemplaza funcionalmente a la FV,
-mismo flujo de área/completitud/aprobación. Las **Notas Crédito** (`tipo_doc=91`) van a la
+La ingesta trae 4 tipos de documento en la misma sesión de navegador
+(`filters[tipoDocRecepcion]`; la lista es `_FASES` en `sincronizar.py`): **Facturas**
+(`tipo_doc=1`) y **Documentos Equivalentes** (`tipo_doc=20`) van a la tabla `facturas`
+diferenciados por la columna `tipo_documento` (`FACTURA|EQUIVALENTE`) — un Equivalente
+reemplaza funcionalmente a la FV, mismo flujo de área/completitud/aprobación. Las **Notas
+Crédito** (`tipo_doc=91`) y las **Notas a Documento Equivalente** (`tipo_doc=94`, p. ej. Copa
+anulando tiquetes ya cargados como equivalentes; pedido del usuario el 2026-11-20) van a la
 tabla aparte `notas_credito` (**sí tienen área**, pero NO flujo de completitud/aprobación —
-ver "Notas Crédito" abajo; blobs en `notas_credito/AAAA/MM/`). No se extraen Notas Débito
-(`92`) — no se ha pedido.
+ver "Notas Crédito" abajo; blobs en `notas_credito/AAAA/MM/`). La tabla no guarda el tipo
+(91/94); se distinguen por el folio. No se extraen Notas Débito (`92`) — no se ha pedido.
+
+n8n corre la ingesta a las 10:00 y 20:00 UTC con **`dias=30`** (deducido de los datos: el
+flujo "Actualizar Facturas" no es legible por MCP y la copia en `n8n/` está desactualizada);
+el botón del Admin corre con `dias=3`. Un documento que no entró se reintenta solo mientras
+siga dentro de esos 30 días.
 
 ## Entorno de ejecución (IMPORTANTE)
 
@@ -73,6 +80,7 @@ Esto es lo más frágil del proyecto. Ya resuelto, pero entiéndelo antes de toc
    abierto, su backdrop tapa el botón "Buscar" del siguiente documento y fallan todos.
    `_cerrar_modales()` se llama antes de cada descarga (cierre amable + red de seguridad por JS
    que oculta modales/backdrops residuales). `descargar_pdf` además **reintenta hasta 3 veces**.
+   Los popups **SweetAlert2** son otra familia y tumbaron la ingesta dos semanas — ver 14.
 5. **El login de v3.1.0.17 NO navega a otra URL.** Antes `_login()` esperaba
    `wait_for_url("**/documentRecepcion/**")`; desde la actualización del portal la pantalla de
    recepción se renderiza **dejando la URL en `#/login`**, así que esa espera reventaba con
@@ -120,12 +128,73 @@ Esto es lo más frágil del proyecto. Ya resuelto, pero entiéndelo antes de toc
 13. El login **reintenta 3 veces** con espera creciente: el portal a veces no alcanza a pintar
    el formulario y el `fill` del usuario revienta con Timeout. No es bloqueo — al reintentar
    entra —, pero sin reintento el robot se quedaba sin correr hasta la franja siguiente.
+   **Excepción: un RECHAZO del portal no se reintenta** (`CredencialesRechazadas`) — ver 15.
+14. **Documentos SIN PDF y el popup SweetAlert2 (caída del 2026-11-06 al 2026-11-20).** Cuando
+   el proveedor manda el XML sin PDF, `pdf-recepcion` responde **200 `text/plain` ("-1")** y el
+   portal abre un SweetAlert2 ("Este documento no tiene representación gráfica (PDF). ¿Desea
+   generar la factura web?", botones "Generar factura web" / "Cerrar"). El robot esperaba 45 s
+   un `application/pdf` y no cerraba el popup (`_cerrar_modales` solo conocía modales
+   Bootstrap), así que su fondo (`.swal2-container`) tapaba "Buscar": fallaban en cascada las
+   facturas siguientes y el listado de equivalentes, que subía al try general — **Equivalentes
+   y Notas Crédito ni se pedían**. Así se perdieron dos semanas de EQ/NC (y antes, del 10-09 al
+   10-28, por WA652301). Ahora: `_descargar_pdf_una_vez` acepta cualquier respuesta de
+   `pdf-recepcion` y si no es PDF cierra el popup; lanza `DocumentoSinPdf` (~2 s, no se
+   reintenta) **solo** si fue 200 y el popup dice "representación gráfica" — cualquier otra
+   respuesta (4xx, 5xx, otro formato) es error, se reintenta y cuenta: tomarla por "sin PDF"
+   callaría una caída del servicio. `_cerrar_popup_swal()` elige el botón antes de pulsar:
+   **"Cerrar"**, si no la X, y "confirmar" solo si es el único (nunca "Generar factura web",
+   que abre otra pestaña); `_cerrar_modales` lo llama antes de cada descarga y listado.
+   En `sincronizar.py` **cada fase va aislada** (`_correr_fase`): un fallo de un tipo ya no
+   impide los demás. Los sin PDF NO cuentan como error (la corrida puede quedar `ok`): van en
+   la línea "Sin PDF en el portal" del detalle y se reintentan en cada corrida.
+   Regresión: `scripts/probar_sin_pdf.py` (local, sin IA, FV70 de primero).
+15. **El login rechazado se lee de la respuesta cifrada, no de la pantalla.** Ante CUALQUIER
+   rechazo la UI muestra "Usuario o contraseña incorrectos" 7 s (el mensaje real está
+   comentado en el bundle); la respuesta de `/login/user-login` sí dice el motivo ("Su cuenta
+   se encuentra bloqueada…"). `_rechazo_de_login()` descifra `get-token`/`user-login` con la
+   propia función del portal (`angular.element(document.body).injector()
+   .get('LoginService').infoSecurity.desencriptar`) y lanza `CredencialesRechazadas` **sin
+   reintentar**: el 2026-11-19 la cuenta amaneció bloqueada y los 3 reintentos por corrida solo
+   sumaban intentos fallidos. Desbloquear = "¿Olvidaste tu contraseña?" en el portal; la clave
+   nueva va en `.env` **y** en los App Settings de Azure a la vez. Los campos se buscan por id
+   (`#username_f`, `#pass_f`): con la lista de selectores, `.first` llegó a tomar el
+   `input#firstName` OCULTO del registro (#341-#346). Hay reCAPTCHA en la página, pero el login
+   no lo envía ni lo exige.
+16. **El portal acepta rangos de hasta 90 días** (`validarFilters`: más que eso abre un popup y
+   NO consulta, y la grilla se queda con el listado anterior). `listar_documentos` lanza
+   `ValueError` antes de pedirlo, y `_validar_busqueda()` falla si tras "Buscar" aparece un
+   popup o el SP falló (`ctrl.document.error`): antes ambos casos se leían como "no hay
+   documentos". El `.detalle` de `ejecuciones` pone primero el fallo general, una línea por
+   fase, los sin PDF y el rango; los errores por documento van después y solo con su primera
+   línea (los 'Call log' de Playwright llenaban los 4000 caracteres y cortaban el "Fallo
+   general"). La celda del Admin muestra el comienzo y el detalle entero al pasar el mouse.
+17. **Respuestas atrasadas: nada se lee "a ciegas"** (revisión adversaria del 2026-11-20). El
+   portal aplica cada respuesta del SP cuando llega, sin id de petición, y `networkidle`
+   vuelve al instante en esta SPA. Por eso: `_esperar_listado` **lanza** si al vencer (130 s;
+   el portal le da 120 s al SP) sigue cargando, en vez de devolver el listado anterior; el
+   tamaño de página va por el modelo (`$ctrl.countRegist` en `_JS_FIJAR_FILTROS`) porque el
+   `ng-change` de `select#regist` lanzaba una segunda búsqueda que corría la paginación; una
+   página repetida lanza error y un listado con menos documentos que `totalItems` deja la
+   fase en error ("LISTADO INCOMPLETO"); la descarga espera el fin de la búsqueda, abre la
+   fila **cuyo `item.cufe` es el pedido** (no la primera) y ata la respuesta a la petición que
+   disparó **su** clic (un XHR vencido de un intento anterior ya no se toma por el PDF de
+   otro documento). **Sesión perdida**: el portal cierra la sesión tras 10 min sin mouse ni
+   teclado ('Sesión expirada'); se detecta (`SesionPerdida`), se vuelve a entrar una vez por
+   corrida (`reiniciar_sesion`) y a la segunda se aborta. Las llamadas a la IA de la ingesta
+   tienen tope (`CLIENTE_IA_INGESTA`: 90 s, 1 reintento) para no dormir la sesión. **Clave
+   rechazada**: el "Fallo general" lleva `[clave rechazada <huella>]` (HMAC de usuario+clave
+   con `JWT_SECRET`) y las corridas automáticas siguientes **no vuelven a probar esa misma
+   clave** (`_clave_ya_rechazada`); se re-arma sola al cambiar la clave, y "Sincronizar
+   ahora" del Admin la fuerza (`forzar_login=True`). Regresión de todo: `scripts/probar_sin_pdf.py`.
 
 Para verificar SOLO el listado (sin tocar BD ni Blob) — primer sitio a mirar si la ingesta
 trae 0 documentos:
 ```bash
 .venv/Scripts/python.exe scripts/probar_listado_portal.py 7
 ```
+
+**Ojo al diagnosticar el login: cada prueba es un intento real contra la cuenta del robot.**
+Si falla, leer el motivo antes de repetir (ver 15) — no encadenar scripts que reintentan.
 
 Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
 ```bash
@@ -530,6 +599,18 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
 
 ## Estado / pendientes
 
+- **Caída de EQ/NC del 2026-11-06 al 2026-11-20 (gotchas 14-16)**: arreglada en código el
+  2026-11-20; la cuenta del robot (bloqueada el 11-19) se restauró ese día. Comparando portal
+  vs BD del 10-01 al 11-20 faltaban **44 facturas, 6 equivalentes y 5 notas crédito** (más 3
+  notas tipo 94 que nunca se han pedido). Pendientes al cierre: (a) desplegar; (b) corrida de
+  recuperación `desde=2026-09-28` (cubre WA652301, que ya salió de la ventana de 30 días);
+  (c) ANTES de esa corrida, corregir la factura manual id 1927 `X2724011731` (CUFE de 86
+  caracteres y NIT 890900341 errado; la del portal es NIT 890900943): si no, el dedup por CUFE
+  no la reconoce y entra duplicada — ya pasó con 1928 `XZ864012426` / 1943 `X2864012426`;
+  (d) decisiones del usuario: si los documentos sin PDF (FV70, FE647, WA652301…) se crean igual
+  sin PDF para subirlo a mano, y si se extrae el tipo 94. También sin resolver: corridas que
+  quedan `en_curso` para siempre (10 entre #270 y #357) y un `BrowserType.launch: Timeout`
+  en Azure (#357) — huele a recursos del contenedor; mirar métricas del App Service.
 - **Login Siesa: RESUELTO (2026-08-05)**. Fueron DOS problemas simultáneos tras la
   actualización a "Siesa E - Invoicing v3.1.0.17": (a) la contraseña dejó de ser válida — el
   usuario la restableció y actualizó `PASSWORD_FACTURAS` en `.env`; (b) `_login()` esperaba una

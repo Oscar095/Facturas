@@ -852,7 +852,7 @@ function Robot() {
               <td>{e.facturas_nuevas}</td>
               <td>{e.notas_credito_nuevas}</td>
               <td>{e.errores}</td>
-              <td className="detalle-corto">{e.detalle || "—"}</td>
+              <td className="detalle-corto" title={e.detalle || ""}>{e.detalle || "—"}</td>
             </tr>
           ))}
         </tbody>

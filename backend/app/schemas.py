@@ -301,3 +301,7 @@ class ResumenSync(BaseModel):
     notas_credito_nuevas: int = 0
     errores: int
     sin_area_asignada: list[str]
+    # documentos que el portal no tiene en PDF: no son error del robot, pero
+    # alguien debe pedirle el PDF al proveedor (si no, nunca entran)
+    sin_pdf: list[str] = []
+    fases: list[str] = []   # una línea por tipo de documento

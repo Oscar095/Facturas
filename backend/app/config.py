@@ -66,3 +66,9 @@ class Settings:
 
 
 settings = Settings()
+
+# Tope de las llamadas a la IA que corren DENTRO de la ingesta (área, IVA,
+# vencimiento). Con los valores por defecto del SDK (600 s y 2 reintentos) una
+# llamada colgada podía frenar la corrida media hora, y el portal Siesa cierra
+# la sesión tras 10 min sin actividad (ver SesionPerdida en siesa_client.py).
+CLIENTE_IA_INGESTA = {"timeout": 90.0, "max_retries": 1}

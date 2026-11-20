@@ -21,6 +21,10 @@ try:
     print(f"  facturas/equivalentes nuevas: {resumen['facturas_nuevas']}")
     print(f"  notas crédito nuevas: {resumen['notas_credito_nuevas']}")
     print(f"  errores: {resumen['errores']}")
+    for f in resumen["fases"]:
+        print(f"  · {f}")
+    if resumen["sin_pdf"]:
+        print(f"  sin PDF en el portal: {', '.join(resumen['sin_pdf'])}")
     for d in resumen["detalle"]:
         print(f"  - {d}")
 finally:

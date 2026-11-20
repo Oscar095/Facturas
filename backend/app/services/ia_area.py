@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 
-from ..config import settings
+from ..config import CLIENTE_IA_INGESTA, settings
 
 log = logging.getLogger("ia_area")
 
@@ -38,7 +38,7 @@ def sugerir_area(
     try:
         import anthropic
 
-        cliente = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        cliente = anthropic.Anthropic(api_key=settings.anthropic_api_key, **CLIENTE_IA_INGESTA)
         lineas = "\n".join(
             f"- id={aid}: {nombre}" + (f" (pistas de ítems: {', '.join(pistas)})" if pistas else "")
             for aid, nombre, pistas in candidatas

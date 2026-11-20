@@ -91,7 +91,10 @@ def _rango_mes(clave: str) -> tuple[datetime, datetime]:
 def _correr_sync_en_fondo(dias: int):
     db = SessionLocal()
     try:
-        sincronizar(db, dias=dias)
+        # forzar_login: lo pide una persona desde el Admin, así que se intenta
+        # entrar aunque la última corrida automática haya visto rechazada la
+        # clave (p. ej. desbloquearon la cuenta sin cambiarla)
+        sincronizar(db, dias=dias, forzar_login=True)
     finally:
         db.close()
 

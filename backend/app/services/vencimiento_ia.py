@@ -22,7 +22,7 @@ import logging
 import re
 from datetime import datetime, timedelta
 
-from ..config import settings
+from ..config import CLIENTE_IA_INGESTA, settings
 from .vencimiento import _MAX_DIAS, _fechas_en
 
 log = logging.getLogger("vencimiento_ia")
@@ -128,7 +128,7 @@ def sugerir_vencimiento(pdf: bytes | None, texto: str | None,
     try:
         import anthropic
 
-        cliente = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        cliente = anthropic.Anthropic(api_key=settings.anthropic_api_key, **CLIENTE_IA_INGESTA)
         respuesta = cliente.messages.create(
             model=MODELO,
             max_tokens=60,  # una fecha + el fragmento citado

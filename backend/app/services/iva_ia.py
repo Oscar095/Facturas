@@ -24,7 +24,7 @@ import logging
 import re
 from decimal import Decimal, InvalidOperation
 
-from ..config import settings
+from ..config import CLIENTE_IA_INGESTA, settings
 from .iva import _TOLERANCIA, _numeros, a_decimal
 
 log = logging.getLogger("iva_ia")
@@ -196,7 +196,7 @@ def sugerir_iva(pdf: bytes | None, texto: str | None,
     try:
         import anthropic
 
-        cliente = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        cliente = anthropic.Anthropic(api_key=settings.anthropic_api_key, **CLIENTE_IA_INGESTA)
         respuesta = cliente.messages.create(
             model=MODELO,
             max_tokens=80,  # dos cifras + el fragmento citado
