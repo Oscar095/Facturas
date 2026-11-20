@@ -5,7 +5,9 @@ sqlalchemy==2.0.*
 alembic==1.14.*
 pyodbc==5.2.*
 azure-storage-blob==12.24.*
-playwright==1.*
+# Fijado a la versión que corre en producción: con "1.*" el build tomó 1.65 solo y se
+# rompió. Subirlo es una decisión aparte (probar la ingesta con la versión nueva).
+playwright==1.62.*
 python-dotenv==1.*
 httpx==0.28.*
 pyjwt==2.10.*

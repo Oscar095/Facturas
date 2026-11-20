@@ -599,18 +599,31 @@ Para probar la ingesta real (escribe en Azure SQL + Blob; es idempotente):
 
 ## Estado / pendientes
 
-- **Caída de EQ/NC del 2026-11-06 al 2026-11-20 (gotchas 14-16)**: arreglada en código el
-  2026-11-20; la cuenta del robot (bloqueada el 11-19) se restauró ese día. Comparando portal
-  vs BD del 10-01 al 11-20 faltaban **44 facturas, 6 equivalentes y 5 notas crédito** (más 3
-  notas tipo 94 que nunca se han pedido). Pendientes al cierre: (a) desplegar; (b) corrida de
-  recuperación `desde=2026-09-28` (cubre WA652301, que ya salió de la ventana de 30 días);
-  (c) ANTES de esa corrida, corregir la factura manual id 1927 `X2724011731` (CUFE de 86
-  caracteres y NIT 890900341 errado; la del portal es NIT 890900943): si no, el dedup por CUFE
-  no la reconoce y entra duplicada — ya pasó con 1928 `XZ864012426` / 1943 `X2864012426`;
-  (d) decisiones del usuario: si los documentos sin PDF (FV70, FE647, WA652301…) se crean igual
-  sin PDF para subirlo a mano, y si se extrae el tipo 94. También sin resolver: corridas que
-  quedan `en_curso` para siempre (10 entre #270 y #357) y un `BrowserType.launch: Timeout`
-  en Azure (#357) — huele a recursos del contenedor; mirar métricas del App Service.
+- **Caída de EQ/NC del 2026-11-06 al 2026-11-20 (gotchas 14-17)**: arreglada en código
+  (commit `cb95744`); la cuenta del robot (bloqueada el 11-19) se restauró el 11-20. Ese día,
+  con el código nuevo y desde la máquina local, la corrida de recuperación **#358**
+  (`2026-09-28..2026-11-20`) quedó `ok` y sin errores: 46 facturas, 6 equivalentes, 5 notas
+  crédito y 3 notas tipo 94 (Copa). Antes se corrigieron las facturas manuales con datos mal
+  digitados que la recuperación habría duplicado (eventos `correccion_datos`): 1927
+  `X2724011731` (NIT y CUFE del portal) y 1928 `XZ864012426` → `X2864012426` (número, NIT y
+  CUFE), y se borró su duplicado del portal, la 1943. Lección: una carga manual con el CUFE
+  mal copiado no la reconoce el dedup y la ingesta la vuelve a crear. Quedan 23 facturas de
+  la recuperación sin área (asignar a mano) y 3 **sin PDF en el portal** (FV70, FE647,
+  WA652301): hay que pedirle el PDF al proveedor o cargarlas por `/cargar-factura`.
+- **Despliegue roto del 2026-11-19 al 2026-11-20** (en Azure siguió el código del 09-01, con
+  el bug del popup): los builds de `ecf52b2` y `cb95744` fallaron con `exit code: 127` en
+  `pip install … && playwright install --with-deps chromium`. No era el código:
+  `playwright==1.*` sin fijar resolvió a 1.65, cuyo Node empaquetado enlaza `libatomic.so.1`,
+  que `python:3.12-slim` no trae (el cargador sale con 127 al no encontrarla; el de 1.62, el
+  último desplegado, no la pedía). Arreglo: `libatomic1` en el apt del Dockerfile y
+  Playwright fijado a `1.62.*`. Subir Playwright es una decisión aparte, no algo que haga
+  solo el build. **El error del build se lee sin ser admin** en las anotaciones del
+  check-run: `api.github.com/repos/Oscar095/Facturas/actions/runs/<run>/jobs` da el id del
+  job y `…/check-runs/<job_id>/annotations` el mensaje (los logs completos sí piden admin).
+- Sin resolver: corridas que quedan `en_curso` para siempre (10 entre #270 y #357), un
+  `BrowserType.launch: Timeout` en Azure (#357) — huele a recursos del contenedor; mirar
+  métricas del App Service — y que n8n avise cuando `sin_pdf` no esté vacío (el flujo
+  desplegado no es legible por MCP).
 - **Login Siesa: RESUELTO (2026-08-05)**. Fueron DOS problemas simultáneos tras la
   actualización a "Siesa E - Invoicing v3.1.0.17": (a) la contraseña dejó de ser válida — el
   usuario la restableció y actualizó `PASSWORD_FACTURAS` en `.env`; (b) `_login()` esperaba una

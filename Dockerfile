@@ -17,9 +17,11 @@ ENV PYTHONUNBUFFERED=1 \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 WORKDIR /app
 
-# ODBC Driver 18 for SQL Server (para conectar a Azure SQL con pyodbc)
+# ODBC Driver 18 for SQL Server (para conectar a Azure SQL con pyodbc).
+# libatomic1: el Node que trae Playwright desde 1.65 la enlaza y python:3.12-slim no la
+# incluye; sin ella `playwright install` sale con 127 y el build falla (2026-11-19).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl gnupg ca-certificates apt-transport-https unixodbc \
+        curl gnupg ca-certificates apt-transport-https unixodbc libatomic1 \
     && curl -sSL https://packages.microsoft.com/keys/microsoft.asc \
         | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
     && curl -sSL https://packages.microsoft.com/config/debian/12/prod.list \
